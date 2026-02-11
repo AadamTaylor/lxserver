@@ -39,6 +39,26 @@ const getMime = (filename: string) => {
   return mimeTypes[ext] || 'application/octet-stream'
 }
 
+/**
+ * 规范化歌曲信息，确保收藏列表中的 meta 属性在根节点也可用
+ * 解决 SDK 无法识别收藏歌曲音质的问题
+ */
+const normalizeSongInfo = (songInfo: any) => {
+  if (!songInfo) return songInfo
+  // 处理音质信息 (types / _types)
+  if (!songInfo.types && songInfo.meta) {
+    songInfo.types = songInfo.meta.qualitys || songInfo.meta.types
+  }
+  if (!songInfo._types && songInfo.meta) {
+    songInfo._types = songInfo.meta._qualitys || songInfo.meta._types
+  }
+  // 处理备用字段
+  if (!songInfo.albumName && songInfo.meta?.albumName) songInfo.albumName = songInfo.meta.albumName
+  if (!songInfo.img && songInfo.meta?.picUrl) songInfo.img = songInfo.meta.picUrl
+
+  return songInfo
+}
+
 let status: LX.Sync.Status = {
   status: false,
   message: '',
@@ -1315,8 +1335,9 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
 
         void readBody(req).then(async body => {
           try {
-            const { songInfo, quality } = JSON.parse(body)
-            // console.log('[MusicUrl] Song Info:', JSON.stringify(songInfo, null, 2))
+            let { songInfo, quality } = JSON.parse(body)
+            songInfo = normalizeSongInfo(songInfo)
+            console.log('[MusicUrl] Song Info:', JSON.stringify(songInfo, null, 2))
             if (!songInfo || !songInfo.source) {
               throw new Error('Invalid songInfo')
             }
@@ -1410,7 +1431,8 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
       if (pathname === '/api/music/lyric' && req.method === 'POST') {
         void readBody(req).then(async body => {
           try {
-            const { songInfo } = JSON.parse(body)
+            let { songInfo } = JSON.parse(body)
+            songInfo = normalizeSongInfo(songInfo)
             if (!songInfo || !songInfo.source) {
               throw new Error('Invalid songInfo')
             }
@@ -1463,7 +1485,8 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
       if (pathname === '/api/music/pic' && req.method === 'POST') {
         void readBody(req).then(async body => {
           try {
-            const { songInfo } = JSON.parse(body)
+            let { songInfo } = JSON.parse(body)
+            songInfo = normalizeSongInfo(songInfo)
             if (!songInfo || !songInfo.source) {
               throw new Error('Invalid songInfo')
             }

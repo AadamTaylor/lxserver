@@ -41,9 +41,11 @@ let settings = {
     enableProxyDownload: false, // 下载音乐代理
     hotSearchLimit: 20, // 热搜显示数量
     lyricFontSize: 1.25, // 歌词字体大小 (rem)
-    lyricFontFamily: '', // 歌词字体
+    lyricFontFamily: '', // 词字体
     switchPlaylistOnSearchPlay: true, // 播放搜索歌曲时切换歌单 (默认开启)
-    autoResume: true // 自动恢复进度 (默认开启)
+    autoResume: true, // 自动恢复进度 (默认开启)
+    showSidebarSongInfo: true, // 展示侧边栏封面
+    enableCrossfade: true // 音频淡入淡出
 };
 
 // 从 localStorage 加载设置
@@ -59,6 +61,7 @@ try {
 let batchMode = false;
 let selectedItems = new Set(); // Set of item IDs
 let selectedSongObjects = new Map(); // Map of ID -> Song Object (for cross-page selection)
+let expandBtnTimeout = null; // 展开按钮淡化计时器
 
 // ===== 认证相关代码 =====
 let authEnabled = false;
@@ -260,19 +263,28 @@ document.addEventListener('DOMContentLoaded', () => {
 let isDragging = null; // 'progress' or 'volume'
 let dragPercentage = 0; // Temp value for progress smoothing
 let lastSeekTime = 0; // Throttling for live seeking
+let lastSeekPct = -1; // 上次执行 seek 时的进度百分比，用于避免原地抖动
 const SEEK_THROTTLE_MS = 100; // How often to update audio position while dragging (ms)
 
 function startDragging(e, type) {
     if (e.type === 'touchstart') e.preventDefault(); // Prevent scrolling while seeking
     isDragging = type;
+    if (type === 'progress') lastSeekPct = -1; // 重置
     handleDragMove(e);
 }
 
 function stopDragging() {
     if (isDragging === 'progress' && Number.isFinite(dragPercentage)) {
-        audio.currentTime = dragPercentage * audio.duration;
+        // 只有当最终位置与上次 seek 的位置差异较大时，才执行最后一次 seek
+        if (Math.abs(dragPercentage - lastSeekPct) > 0.001) {
+            audio.currentTime = dragPercentage * audio.duration;
+            if (typeof lyricPlayer !== 'undefined' && lyricPlayer) {
+                lyricPlayer.play(audio.currentTime * 1000);
+            }
+        }
     }
     isDragging = null;
+    lastSeekPct = -1;
 }
 
 function handleDragMove(e) {
@@ -298,8 +310,21 @@ function handleDragMove(e) {
         // 2. Throttled update of audio position (Live Seeking)
         const now = Date.now();
         if (now - lastSeekTime > SEEK_THROTTLE_MS) {
-            audio.currentTime = pct * audio.duration;
-            lastSeekTime = now;
+            // 只有当进度百分比发生较明显变化（大于 0.1%）时才执行 seek
+            // 这可以防止鼠标微小抖动导致的“原地复读”感，并允许停下时正常播放（预览）
+            if (Math.abs(pct - lastSeekPct) > 0.001) {
+                audio.currentTime = pct * audio.duration;
+
+                // 同步更新歌词进度
+                if (typeof lyricPlayer !== 'undefined' && lyricPlayer) {
+                    lyricPlayer.play(audio.currentTime * 1000);
+                    // 强制歌词对齐但不等待平滑滚动，保持灵敏度
+                    scrollToActiveLine(true);
+                }
+
+                lastSeekTime = now;
+                lastSeekPct = pct;
+            }
         }
     } else if (isDragging === 'volume') {
         const container = document.getElementById('volume-container');
@@ -564,6 +589,21 @@ document.addEventListener('DOMContentLoaded', () => {
         if (versionEl) {
             versionEl.innerText = window.CONFIG.version + ' Web';
         }
+    }
+
+    // 为展开按钮添加悬放恢复逻辑
+    const expandBtn = document.getElementById('btn-expand-panel');
+    if (expandBtn) {
+        expandBtn.addEventListener('mouseenter', () => {
+            if (expandBtnTimeout) clearTimeout(expandBtnTimeout);
+            expandBtn.classList.remove('faint');
+        });
+        expandBtn.addEventListener('mouseleave', () => {
+            const footer = document.getElementById('player-footer');
+            if (footer && footer.classList.contains('translate-y-[110%]')) {
+                startExpandBtnTimer();
+            }
+        });
     }
 });
 
@@ -1189,7 +1229,13 @@ async function playSong(song, index, forceQuality = null, noPlay = false) {
 
     // 显示加载状态
     setPlayerStatus('正在获取播放链接...');
-    try { audio.pause(); } catch (e) { } // 确保上一首立即停止
+
+    // [Crossfade] 如果开启了淡入淡出，则先并行执行淡出
+    if (settings.enableCrossfade && !noPlay && audio && !audio.paused && audio.src) {
+        fadeVolume(0, 600);
+    } else if (!noPlay) {
+        try { audio.pause(); } catch (e) { } // 确保上一首立即停止
+    }
     updatePlayButton(false); // 暂停按钮状态
 
     try {
@@ -1261,7 +1307,19 @@ async function playSong(song, index, forceQuality = null, noPlay = false) {
 
             // 尝试播放
             try {
+                // [Crossfade] 播放前先将音量降为 0，准备淡入
+                if (settings.enableCrossfade) {
+                    audio.volume = 0;
+                } else {
+                    audio.volume = typeof currentVolume !== 'undefined' ? currentVolume : 1;
+                }
+
                 await audio.play();
+
+                if (settings.enableCrossfade) {
+                    fadeVolume(typeof currentVolume !== 'undefined' ? currentVolume : 1, 1000);
+                }
+
                 currentQuality = result.type || quality;
                 setPlayerStatus(`播放中 (${window.QualityManager.getQualityDisplayName(currentQuality)})`);
                 updatePlayButton(true);
@@ -1444,25 +1502,13 @@ function updatePlayerInfo(song) {
     document.getElementById('sidebar-singer').innerText = song.singer;
 
     // Detail View Info (Lyrics Page)
-    // Detail View Info (Lyrics Page)
     const detailTitle = document.getElementById('detail-title');
     const detailContainer = document.getElementById('detail-title-container');
 
     if (detailTitle && detailContainer) {
-        // Reset
-        detailTitle.classList.remove('animate-marquee');
+        // 直接设置文本，由 CSS 处理双行换行和省略号
         detailTitle.innerText = song.name;
-
-        // Wait for render to check width
-        setTimeout(() => {
-            if (detailTitle.scrollWidth > detailContainer.clientWidth) {
-                // Duplicate text for seamless scroll (Text + Gap + Text + Gap)
-                // We use -50% translation, so we need two identical halves.
-                const gap = '<span class="mx-8"></span>';
-                detailTitle.innerHTML = `<span>${song.name}</span>${gap}<span>${song.name}</span>${gap}`;
-                detailTitle.classList.add('animate-marquee');
-            }
-        }, 100);
+        detailTitle.classList.remove('animate-marquee');
     }
 
     const detailArtist = document.getElementById('detail-artist');
@@ -1592,12 +1638,53 @@ function playPrev() {
     playSong(currentPlaylist[prevIndex], prevIndex);
 }
 
+// 音量淡入淡出辅助函数
+let volumeFadeInterval = null;
+function fadeVolume(targetVolume, duration = 800) {
+    if (volumeFadeInterval) clearInterval(volumeFadeInterval);
+
+    const startVolume = audio.volume;
+    const steps = 20;
+    const increment = (targetVolume - startVolume) / steps;
+    const stepTime = duration / steps;
+    let currentStep = 0;
+
+    return new Promise((resolve) => {
+        volumeFadeInterval = setInterval(() => {
+            currentStep++;
+            let nextVolume = startVolume + (increment * currentStep);
+
+            // 边界检查
+            if (nextVolume < 0) nextVolume = 0;
+            if (nextVolume > 1) nextVolume = 1;
+
+            audio.volume = nextVolume;
+
+            if (currentStep >= steps) {
+                clearInterval(volumeFadeInterval);
+                audio.volume = targetVolume;
+                resolve();
+            }
+        }, stepTime);
+    });
+}
+
 // Audio Events
 audio.addEventListener('timeupdate', () => {
     if (isDragging === 'progress') return; // Skip updating UI while user is dragging
 
     const current = audio.currentTime;
     const duration = audio.duration;
+
+    // [Crossfade] 自然播放接近结束时提前淡出
+    if (settings.enableCrossfade && duration > 5 && (duration - current < 1.0)) {
+        if (!window._isFadingOut) {
+            window._isFadingOut = true;
+            fadeVolume(0, 1000);
+        }
+    } else if (duration - current > 1.5) {
+        window._isFadingOut = false;
+    }
 
     document.getElementById('time-current').innerText = formatTime(current);
     document.getElementById('time-total').innerText = formatTime(duration);
@@ -2139,9 +2226,42 @@ function updateSetting(key, value) {
     } catch (e) {
         console.error('[Settings] 保存设置失败:', e);
     }
+    // 实时同步 UI 并应用效果
+    syncSettingsUI(key, value);
 }
 
-function syncSettingsUI() {
+function syncSettingsUI(key = null, value = null) {
+    // 如果指定了 key 和 value，则只更新对应项
+    if (key !== null && value !== null) {
+        if (key === 'switchPlaylistOnSearchPlay') {
+            const check = document.getElementById('setting-switch-playlist-search');
+            if (check) check.checked = value;
+        }
+
+        if (key === 'showSidebarSongInfo') {
+            const check = document.getElementById('setting-show-sidebar-info');
+            if (check) check.checked = value;
+
+            // 实时应用逻辑 (通过控制 md:block 来决定桌面端是否显示，底色 hidden 保留)
+            const sidebarInfo = document.querySelector('.sidebar-song-info-wrapper');
+            if (sidebarInfo) {
+                if (value) {
+                    sidebarInfo.classList.add('md:block');
+                } else {
+                    sidebarInfo.classList.remove('md:block');
+                }
+            }
+        }
+
+        if (key === 'enableCrossfade') {
+            const check = document.getElementById('setting-enable-crossfade');
+            if (check) check.checked = value;
+        }
+        // 如果有其他需要实时更新的设置，可以在这里添加
+        return;
+    }
+
+    // 否则，同步所有 UI 状态
     // 逻辑页签设置
     const switchSearch = document.getElementById('setting-switch-playlist-search');
     if (switchSearch) {
@@ -2151,6 +2271,26 @@ function syncSettingsUI() {
     const autoResume = document.getElementById('setting-auto-resume');
     if (autoResume) {
         autoResume.checked = settings.autoResume !== false;
+    }
+
+    const showSidebar = document.getElementById('setting-show-sidebar-info');
+    if (showSidebar) {
+        showSidebar.checked = settings.showSidebarSongInfo !== false;
+
+        // 初始应用
+        const sidebarInfo = document.querySelector('.sidebar-song-info-wrapper');
+        if (sidebarInfo) {
+            if (settings.showSidebarSongInfo !== false) {
+                sidebarInfo.classList.add('md:block');
+            } else {
+                sidebarInfo.classList.remove('md:block');
+            }
+        }
+    }
+
+    const crossfade = document.getElementById('setting-enable-crossfade');
+    if (crossfade) {
+        crossfade.checked = settings.enableCrossfade !== false;
     }
 
     // 其他设置项同步 (如需扩展可以加在这里)
@@ -4704,6 +4844,23 @@ function toggleDetailCover() {
     }
 }
 
+// 启动展开按钮淡化计时器
+function startExpandBtnTimer() {
+    const expandBtn = document.getElementById('btn-expand-panel');
+    if (!expandBtn) return;
+
+    if (expandBtnTimeout) clearTimeout(expandBtnTimeout);
+    expandBtn.classList.remove('faint');
+
+    expandBtnTimeout = setTimeout(() => {
+        // 只有当播放栏仍处于隐藏状态时才淡化
+        const footer = document.getElementById('player-footer');
+        if (footer && footer.classList.contains('translate-y-[110%]')) {
+            expandBtn.classList.add('faint');
+        }
+    }, 3000);
+}
+
 // 切换底部播放栏显示/隐藏 (移动端)
 function togglePlayerPanel() {
     const footer = document.getElementById('player-footer');
@@ -4727,6 +4884,10 @@ function togglePlayerPanel() {
         // 隐藏展开按钮
         expandBtn.classList.remove('translate-y-0', 'opacity-100');
         expandBtn.classList.add('translate-y-20', 'opacity-0');
+
+        // 重置状态
+        if (expandBtnTimeout) clearTimeout(expandBtnTimeout);
+        expandBtn.classList.remove('faint');
 
         // 恢复内容底部 Padding
         views.forEach(id => {
@@ -4757,6 +4918,9 @@ function togglePlayerPanel() {
         // 显示展开按钮
         expandBtn.classList.remove('translate-y-20', 'opacity-0');
         expandBtn.classList.add('translate-y-0', 'opacity-100');
+
+        // 开启 3s 自动淡化计时器
+        startExpandBtnTimer();
 
         // 移除内容底部 Padding (内容延伸到底部)
         views.forEach(id => {

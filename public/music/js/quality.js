@@ -32,7 +32,10 @@ const QUALITY_COLORS = {
 function getBestQuality(songInfo, userPreference = '320k') {
     if (!songInfo) return '128k';
 
-    const types = songInfo.types || songInfo._types || {};
+    const types = songInfo.types || songInfo._types ||
+        songInfo.qualitys || songInfo._qualitys ||
+        (songInfo.meta && (songInfo.meta.qualitys || songInfo.meta._qualitys || songInfo.meta.types || songInfo.meta._types)) ||
+        {};
 
     // 规范化 types 结构
     // musicSdk 返回的格式可能是数组或对象
@@ -93,7 +96,10 @@ function getNextLowerQuality(currentQuality) {
 function getAvailableQualities(songInfo) {
     if (!songInfo) return ['128k'];
 
-    const types = songInfo.types || songInfo._types || {};
+    const types = songInfo.types || songInfo._types ||
+        songInfo.qualitys || songInfo._qualitys ||
+        (songInfo.meta && (songInfo.meta.qualitys || songInfo.meta._qualitys || songInfo.meta.types || songInfo.meta._types)) ||
+        {};
 
     if (Array.isArray(types)) {
         return types.map(t => t.type || t);

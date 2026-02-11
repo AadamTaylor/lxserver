@@ -257,6 +257,33 @@
             display: none;
             /* Chrome, Safari and Opera */
         }
+
+        /* Expand Button Faint Style */
+        #btn-expand-panel.faint {
+            opacity: 0.15 !important;
+            background-color: rgba(255, 255, 255, 0.4) !important;
+            border-color: rgba(200, 200, 200, 0.2) !important;
+        }
+
+        #btn-expand-panel.faint:hover {
+            opacity: 1 !important;
+            background-color: rgba(255, 255, 255, 0.9) !important;
+        }
+
+        /* Detail Title multi-line support */
+        #detail-title {
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            white-space: normal !important;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            line-height: 1.25;
+        }
+
+        #detail-title-container {
+            white-space: normal !important;
+        }
     </style>
 </head>
 
@@ -393,14 +420,8 @@
                 </ul>
             </nav>
 
-            <div class="hidden md:block px-6 py-4 text-xs text-gray-400 text-center border-t border-gray-100">
-                Copyright © 2026 <a href="https://github.com/xcq0607" target="_blank"
-                    class="hover:text-emerald-500 transition-colors">xcq0607</a>.<br>
-                Licensed under Apache-2.0.
-            </div>
-
             <!-- Mini Player Info (Optional, cover art here) -->
-            <div class="hidden md:block">
+            <div class="hidden md:block sidebar-song-info-wrapper mt-auto">
                 <div id="sidebar-song-info" class="p-4 border-t border-gray-100 hidden">
                     <img id="sidebar-cover" src="/music/assets/logo.svg" onerror="this.src='/music/assets/logo.svg'"
                         alt="Cover" class="w-full rounded-lg shadow-md mb-3 dynamic-logo">
@@ -409,6 +430,12 @@
                         <div id="sidebar-singer" class="text-xs text-gray-500 truncate">Artist</div>
                     </div>
                 </div>
+            </div>
+
+            <div class="hidden md:block px-6 py-4 text-[10px] text-gray-400 text-center border-t border-gray-100">
+                Copyright © 2026 <a href="https://github.com/xcq0607" target="_blank"
+                    class="hover:text-emerald-500 transition-colors">xcq0607</a>.<br>
+                Licensed under Apache-2.0.
             </div>
         </aside>
 
@@ -765,9 +792,9 @@
                                             KB</span>
                                     </div>
                                     <button onclick="resetAllSettings()"
-                                        class="w-full py-2.5 bg-red-50 text-red-500 hover:bg-red-500 hover:text-white font-bold rounded-lg transition-all duration-300 border border-red-100 flex items-center justify-center gap-2">
-                                        <i class="fas fa-undo-alt"></i>
-                                        重置所有设置为默认 (Reset Settings)
+                                        class="w-full py-2.5 px-4 bg-red-50 text-red-500 hover:bg-red-500 hover:text-white font-bold rounded-lg transition-all duration-300 border border-red-100 flex items-center justify-center gap-3 text-center">
+                                        <i class="fas fa-undo-alt flex-shrink-0"></i>
+                                        <span class="leading-tight">重置所有设置为默认 (Reset Settings)</span>
                                     </button>
                                 </div>
                             </div>
@@ -959,6 +986,26 @@
                                     </div>
                                 </div>
                             </div>
+
+                            <!-- Sidebar Info Toggle -->
+                            <div
+                                class="bg-white rounded-xl border border-gray-100 p-4 hover:shadow-sm transition-shadow">
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <h4 class="text-sm font-bold text-gray-800">展示侧边栏封面/标题 (Sidebar Info)</h4>
+                                        <p class="text-xs text-gray-400 mt-1">
+                                            是否在屏幕左下角展示当前播放歌曲的封面和名称 (仅在电脑版生效)。
+                                        </p>
+                                    </div>
+                                    <label class="relative inline-flex items-center cursor-pointer">
+                                        <input type="checkbox" id="setting-show-sidebar-info" class="sr-only peer"
+                                            onchange="updateSetting('showSidebarSongInfo', this.checked)">
+                                        <div
+                                            class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500">
+                                        </div>
+                                    </label>
+                                </div>
+                            </div>
                         </div>
 
                         <!-- Logic Settings Panel -->
@@ -1013,66 +1060,87 @@
                                         </label>
                                     </div>
                                 </div>
-                            </div>
-                        </div>
 
-                        <!-- Logs Settings Panel -->
-                        <div id="settings-panel-logs" class="hidden space-y-6 animate-fade-in h-96 flex flex-col">
-                            <div class="flex flex-wrap items-center justify-between gap-3 mb-2">
-                                <h3 class="font-bold text-gray-800 text-lg flex items-center">
-                                    <i class="fas fa-terminal mr-2 text-emerald-500"></i> 系统日志 (System Logs)
-                                </h3>
-                                <div class="flex gap-2 flex-shrink-0">
-                                    <button onclick="window.clearSystemLogs && window.clearSystemLogs()"
-                                        class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg text-xs transition-colors whitespace-nowrap"
-                                        title="清空日志">
-                                        <i class="fas fa-trash-alt mr-1"></i>清空
-                                    </button>
-                                    <button onclick="window.renderSystemLogs && window.renderSystemLogs()"
-                                        class="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 rounded-lg text-xs transition-colors whitespace-nowrap"
-                                        title="刷新">
-                                        <i class="fas fa-sync-alt mr-1"></i>刷新
-                                    </button>
+                                <!-- Audio Crossfade -->
+                                <div
+                                    class="bg-white rounded-xl border border-gray-100 p-4 hover:shadow-sm transition-shadow">
+                                    <div class="flex items-center justify-between">
+                                        <div>
+                                            <h4 class="text-sm font-bold text-gray-800">音频淡入淡出 (Crossfade)</h4>
+                                            <p class="text-xs text-gray-400 mt-1">
+                                                切换歌曲时，音量平滑淡出和淡入，减少切换的突兀感。
+                                            </p>
+                                        </div>
+                                        <label class="relative inline-flex items-center cursor-pointer">
+                                            <input type="checkbox" id="setting-enable-crossfade" class="sr-only peer"
+                                                onchange="updateSetting('enableCrossfade', this.checked)">
+                                            <div
+                                                class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500">
+                                            </div>
+                                        </label>
+                                    </div>
                                 </div>
-                            </div>
-
-                            <div
-                                class="flex-1 bg-gray-900 rounded-xl border border-gray-800 p-4 font-mono text-xs overflow-hidden flex flex-col shadow-inner">
-                                <div id="system-log-container"
-                                    class="flex-1 overflow-y-auto custom-scrollbar space-y-1 bg-gray-900 text-gray-300">
-                                    <div class="text-gray-500 italic text-center py-4">暂无日志...</div>
-                                </div>
-                            </div>
-                            <div class="text-[10px] text-gray-400 text-right">
-                                * 显示系统启动后的 Console 输出
                             </div>
                         </div>
                     </div>
-                </div>
-                <!-- About View -->
-                <div id="view-about"
-                    class="absolute inset-0 overflow-y-auto custom-scrollbar px-6 pt-6 pb-32 hidden opacity-0 transition-all duration-300">
-                    <div
-                        class="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 max-w-3xl mx-auto w-full prose prose-emerald">
-                        <div id="about-content" class="animate-pulse">
-                            <div class="h-8 bg-gray-200 rounded w-1/3 mb-4"></div>
-                            <div class="h-4 bg-gray-200 rounded w-full mb-2"></div>
-                            <div class="h-4 bg-gray-200 rounded w-full mb-2"></div>
-                            <div class="h-4 bg-gray-200 rounded w-2/3"></div>
+
+                    <!-- Logs Settings Panel -->
+                    <div id="settings-panel-logs" class="hidden space-y-6 animate-fade-in h-96 flex flex-col">
+                        <div class="flex flex-wrap items-center justify-between gap-3 mb-2">
+                            <h3 class="font-bold text-gray-800 text-lg flex items-center">
+                                <i class="fas fa-terminal mr-2 text-emerald-500"></i> 系统日志 (System Logs)
+                            </h3>
+                            <div class="flex gap-2 flex-shrink-0">
+                                <button onclick="window.clearSystemLogs && window.clearSystemLogs()"
+                                    class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg text-xs transition-colors whitespace-nowrap"
+                                    title="清空日志">
+                                    <i class="fas fa-trash-alt mr-1"></i>清空
+                                </button>
+                                <button onclick="window.renderSystemLogs && window.renderSystemLogs()"
+                                    class="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 rounded-lg text-xs transition-colors whitespace-nowrap"
+                                    title="刷新">
+                                    <i class="fas fa-sync-alt mr-1"></i>刷新
+                                </button>
+                            </div>
                         </div>
 
-                        <!-- Check for Updates Button -->
-                        <div class="mt-8 pt-8 border-t border-gray-100 flex flex-col items-center gap-4">
-                            <button onclick="checkForUpdates()"
-                                class="flex items-center gap-2 px-8 py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-2xl shadow-lg shadow-emerald-100 transition-all hover:scale-105 active:scale-95 text-sm font-bold group">
-                                <i class="fas fa-sync-alt group-hover:rotate-180 transition-transform duration-500"></i>
-                                检查版本更新
-                            </button>
-                            <p class="text-xs text-gray-400">点击通过云端检查是否有新版本可用</p>
+                        <div
+                            class="flex-1 bg-gray-900 rounded-xl border border-gray-800 p-4 font-mono text-xs overflow-hidden flex flex-col shadow-inner">
+                            <div id="system-log-container"
+                                class="flex-1 overflow-y-auto custom-scrollbar space-y-1 bg-gray-900 text-gray-300">
+                                <div class="text-gray-500 italic text-center py-4">暂无日志...</div>
+                            </div>
+                        </div>
+                        <div class="text-[10px] text-gray-400 text-right">
+                            * 显示系统启动后的 Console 输出
                         </div>
                     </div>
                 </div>
             </div>
+            <!-- About View -->
+            <div id="view-about"
+                class="absolute inset-0 overflow-y-auto custom-scrollbar px-6 pt-6 pb-32 hidden opacity-0 transition-all duration-300">
+                <div
+                    class="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 max-w-3xl mx-auto w-full prose prose-emerald">
+                    <div id="about-content" class="animate-pulse">
+                        <div class="h-8 bg-gray-200 rounded w-1/3 mb-4"></div>
+                        <div class="h-4 bg-gray-200 rounded w-full mb-2"></div>
+                        <div class="h-4 bg-gray-200 rounded w-full mb-2"></div>
+                        <div class="h-4 bg-gray-200 rounded w-2/3"></div>
+                    </div>
+
+                    <!-- Check for Updates Button -->
+                    <div class="mt-8 pt-8 border-t border-gray-100 flex flex-col items-center gap-4">
+                        <button onclick="checkForUpdates()"
+                            class="flex items-center gap-2 px-8 py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-2xl shadow-lg shadow-emerald-100 transition-all hover:scale-105 active:scale-95 text-sm font-bold group">
+                            <i class="fas fa-sync-alt group-hover:rotate-180 transition-transform duration-500"></i>
+                            检查版本更新
+                        </button>
+                        <p class="text-xs text-gray-400">点击通过云端检查是否有新版本可用</p>
+                    </div>
+                </div>
+            </div>
+    </div>
     </div>
     </div>
 
