@@ -3,6 +3,7 @@ contact_links:
   - name: 💬 加入讨论区 (Discussions)
     url: https://github.com/XCQ0607/lxserver/discussions
     about: 如果你有一般性的问题或想闲聊，请去讨论区。
-  - name: 🔒 安全漏洞反馈 (Security)
-    url: mailto:xcq0607@gmail.com
-    about: 如果发现严重的安全漏洞，请不要公开提交 Issue，请直接邮件联系。
+  - name: 🔒 安全漏洞报告 (Security Policy)
+    url: https://github.com/XCQ0607/lxserver/blob/main/.github/SECURITY.md
+    about: 发现严重安全漏洞？请阅读我们的安全政策并依据指引以邮件形式反馈。
+

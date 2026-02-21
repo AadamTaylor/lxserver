@@ -54,7 +54,7 @@ body:
     id: source
     attributes:
       label: 涉及的音源
-      placeholder: 例如: 网易云 / QQ音乐
+      placeholder: "例如: 网易云 / QQ音乐"
   - type: input
     id: song
     attributes:
@@ -74,14 +74,14 @@ body:
     id: os
     attributes:
       label: 操作系统 (OS)
-      placeholder: 例如: Windows 11 / macOS 13 / Android 12
+      placeholder: "例如: Windows 11 / macOS 13 / Android 12"
     validations:
       required: true
   - type: input
     id: version
     attributes:
       label: 项目版本 (Version)
-      placeholder: 例如: v1.2.0
+      placeholder: "例如: v1.2.0"
     validations:
       required: true
   - type: input
