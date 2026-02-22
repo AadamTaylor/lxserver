@@ -147,7 +147,15 @@ async function downloadSong(songOrId, forceQuality = null, suppressAlerts = fals
             let finalUrl = result.url;
 
             // Check Proxy Download Setting
-            if (typeof settings !== 'undefined' && settings.enableProxyDownload) {
+            let shouldProxyDownload = typeof settings !== 'undefined' && settings.enableProxyDownload;
+            if (!shouldProxyDownload && typeof settings !== 'undefined' && settings.enableAutoProxy) {
+                if (window.location.protocol === 'https:' && finalUrl.startsWith('http://')) {
+                    shouldProxyDownload = true;
+                    console.log('[Proxy] 自动代理 HTTP 下载链接');
+                }
+            }
+
+            if (shouldProxyDownload) {
                 // Use server proxy to force download
                 // [Fix] Check if URL is already proxied by server to prevent double wrapping
                 if (finalUrl.startsWith('/api/music/download')) {

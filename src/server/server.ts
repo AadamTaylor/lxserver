@@ -1193,8 +1193,9 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
         try {
           console.log(`[DownloadProxy] Fetching: ${urlStr} (Inline: ${isInline})`)
 
-          // Use needle to fetch stream (supports redirects and more robust)
-          const needle = require('needle')
+          // 使用原生 http/https 模块以获得最高的流媒体转发性能
+          const http = require('http')
+          const https = require('https')
 
           // Manual redirect handling for maximum control and stability
           const doFetch = (targetUrl: string, attempt: number) => {
@@ -1207,44 +1208,35 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
               return
             }
 
-            const options: any = {
-              follow_max: 0, // Disable auto-follow
-              headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                // 'Referer': new URL(targetUrl).origin // Move to separate try-catch to avoid crash on relative/invalid URLs
+            try {
+              const parsedUrl = new URL(targetUrl)
+              const options: any = {
+                method: 'GET',
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                  'Referer': parsedUrl.origin
+                }
               }
-            }
 
-            try {
-              options.headers['Referer'] = new URL(targetUrl).origin
-            } catch (e) {
-              // Ignore invalid URLs for Referer
-              console.warn(`[DownloadProxy] Could not generate Referer for: ${targetUrl}`)
-            }
+              // 转发 Range 请求头，以支持播放器的快进和拖拽
+              if (req.headers['range']) {
+                options.headers['Range'] = req.headers['range']
+              }
 
-            // Forward Range header
-            if (req.headers['range']) {
-              options.headers['Range'] = req.headers['range']
-            }
+              const lib = parsedUrl.protocol === 'https:' ? https : http
 
-            try {
-              // console.log(`[DownloadProxy] Fetching (Attempt ${attempt}): ${targetUrl}`)
-              const stream = needle.get(targetUrl, options)
-
-              stream.on('response', (proxyRes: any) => {
-                // Handle Redirects
+              const proxyReq = lib.request(targetUrl, options, (proxyRes: any) => {
+                // 处理重定向
                 if ([301, 302, 303, 307, 308].includes(proxyRes.statusCode)) {
                   const location = proxyRes.headers.location
                   if (location) {
-                    // console.log(`[DownloadProxy] Redirecting (${proxyRes.statusCode}): ${location}`)
-                    doFetch(location, attempt + 1)
+                    const nextUrl = location.startsWith('http') ? location : new URL(location, targetUrl).href
+                    doFetch(nextUrl, attempt + 1)
                     return
                   }
                 }
 
-                // console.log(`[DownloadProxy] Serving Stream: ${proxyRes.statusCode}`)
-
-                // Handle Final Response
+                // 处理最终响应
                 let contentType = proxyRes.headers['content-type'] || 'application/octet-stream'
                 if (contentType.includes('audio/') || contentType.includes('video/')) {
                   contentType = contentType.split(';')[0].trim()
@@ -1269,23 +1261,22 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                 }
               })
 
-              stream.on('done', (err: any) => {
-                if (err) {
-                  console.error('[DownloadProxy] Stream Done Error:', err)
-                  if (!res.headersSent) {
-                    res.writeHead(502)
-                    res.end('Stream Error')
-                  }
-                }
-              })
-
-              stream.on('error', (err: any) => {
+              proxyReq.on('error', (err: any) => {
                 console.error('[DownloadProxy] Request Error:', err)
                 if (!res.headersSent) {
                   res.writeHead(502)
                   res.end('Request Error')
                 }
               })
+
+              // 如果客户端（浏览器）中止了请求（例如：用户拖拽进度条、切换歌曲等），应该立刻销毁上游的下载请求，防止持续占用服务器下行带宽
+              req.on('close', () => {
+                if (!proxyReq.destroyed) {
+                  proxyReq.destroy()
+                }
+              })
+
+              proxyReq.end()
 
             } catch (err: any) {
               console.error('[DownloadProxy] Try Error:', err)

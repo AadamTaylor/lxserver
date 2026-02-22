@@ -39,6 +39,7 @@ let settings = {
     enablePublicSources: true, // 是否显示公开源
     enableProxyPlayback: false, // 播放音乐代理
     enableProxyDownload: false, // 下载音乐代理
+    enableAutoProxy: true, // 自动代理
     hotSearchLimit: 20, // 热搜显示数量
     lyricFontSize: 1.25, // 歌词字体大小 (rem)
     lyricFontFamily: '', // 词字体
@@ -144,6 +145,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const proxyDownload = document.getElementById('toggle-proxy-download');
     if (proxyDownload) proxyDownload.checked = settings.enableProxyDownload;
+
+    const autoProxy = document.getElementById('toggle-auto-proxy');
+    if (autoProxy) autoProxy.checked = settings.enableAutoProxy;
 
     const hotSearchLimitInput = document.getElementById('hot-search-limit-input');
     if (hotSearchLimitInput) {
@@ -293,6 +297,12 @@ function changeProxyDownload(enabled) {
     settings.enableProxyDownload = enabled;
     localStorage.setItem('lx_settings', JSON.stringify(settings));
     console.log(`[Settings] Proxy Download: ${enabled}`);
+}
+
+function changeAutoProxy(enabled) {
+    settings.enableAutoProxy = enabled;
+    localStorage.setItem('lx_settings', JSON.stringify(settings));
+    console.log(`[Settings] Auto Proxy: ${enabled}`);
 }
 
 function changeHotSearchLimit(value) {
@@ -1339,7 +1349,15 @@ async function playSong(song, index, forceQuality = null, noPlay = false, isRetr
 
                 let finalUrl = cachedUrl;
                 // Apply Proxy Setting logic
-                if (settings.enableProxyPlayback) {
+                let shouldProxyPlayback = settings.enableProxyPlayback;
+                if (!shouldProxyPlayback && settings.enableAutoProxy) {
+                    if (window.location.protocol === 'https:' && finalUrl.startsWith('http://')) {
+                        shouldProxyPlayback = true;
+                        console.log('[Proxy] 自动代理 HTTP 链接 (缓存源)');
+                    }
+                }
+
+                if (shouldProxyPlayback) {
                     if (!finalUrl.startsWith('/api/music/download')) {
                         const filename = `${song.singer} - ${song.name}.mp3`;
                         finalUrl = `/api/music/download?url=${encodeURIComponent(cachedUrl)}&filename=${encodeURIComponent(filename)}&inline=1`;
@@ -1472,7 +1490,15 @@ async function playSong(song, index, forceQuality = null, noPlay = false, isRetr
             }
 
             // Apply Proxy Setting logic
-            if (settings.enableProxyPlayback) {
+            let shouldProxyPlayback = settings.enableProxyPlayback;
+            if (!shouldProxyPlayback && settings.enableAutoProxy) {
+                if (window.location.protocol === 'https:' && finalUrl.startsWith('http://')) {
+                    shouldProxyPlayback = true;
+                    console.log('[Proxy] 自动代理 HTTP 链接');
+                }
+            }
+
+            if (shouldProxyPlayback) {
                 // Wrap in proxy if not already wrapped
                 if (!finalUrl.startsWith('/api/music/download')) {
                     const filename = `${song.singer} - ${song.name}.mp3`;
