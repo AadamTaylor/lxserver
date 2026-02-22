@@ -192,7 +192,7 @@ try {
             if (curTime <= 0) return 0
             const length = this.lines.length
             for (let index = startIndex; index < length; index++) {
-                if (curTime <= this.lines[index].time) {
+                if (curTime < this.lines[index].time) {
                     return index === 0 ? 0 : index - 1
                 }
             }

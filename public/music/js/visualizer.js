@@ -224,6 +224,26 @@ const musicVisualizer = (function () {
         }
     }
 
+    /**
+     * 手动清除可视化内容
+     * @param {string} type 'footer' | 'detail'
+     */
+    function clear(type) {
+        if (type === 'footer' && waveFooter) {
+            waveFooter.clearAnimations();
+            if (footerCanvas) {
+                const ctx = footerCanvas.getContext('2d');
+                ctx.clearRect(0, 0, footerCanvas.width, footerCanvas.height);
+            }
+        } else if (type === 'detail' && waveDetail) {
+            waveDetail.clearAnimations();
+            if (detailCanvas) {
+                const ctx = detailCanvas.getContext('2d');
+                ctx.clearRect(0, 0, detailCanvas.width, detailCanvas.height);
+            }
+        }
+    }
+
     if (audio) {
         audio.addEventListener('play', () => {
             if (!isInitialized) {
@@ -239,7 +259,7 @@ const musicVisualizer = (function () {
         if (isInitialized) applySettings();
     });
 
-    return { init, applySettings, syncSize };
+    return { init, applySettings, syncSize, clear };
 })();
 
 window.musicVisualizer = musicVisualizer;

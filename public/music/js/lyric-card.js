@@ -108,7 +108,7 @@
     function drawWrappedText(ctx, text, x, y, maxWidth, lineHeight) {
         ctx.textBaseline = 'top';
         let line = '', lineCount = 0;
-        const tokens = text.match(/[\u4e00-\u9fa5]|[a-zA-Z0-9']+|[^\s]/g) || [];
+        const tokens = text.match(/[\u4e00-\u9fa5]|[a-zA-Z0-9']+|./g) || [];
         for (let i = 0; i < tokens.length; i++) {
             const test = line + tokens[i];
             if (ctx.measureText(test).width > maxWidth && line) {
@@ -130,7 +130,7 @@
     function measureTitleLines(title, fontSize, font, maxW) {
         const c = document.createElement('canvas').getContext('2d');
         c.font = `bold ${fontSize}px ${font}`;
-        const tokens = title.match(/[\u4e00-\u9fa5]|[a-zA-Z0-9']+|[^\s]/g) || [];
+        const tokens = title.match(/[\u4e00-\u9fa5]|[a-zA-Z0-9']+|./g) || [];
         let line = '', lines = 1;
         for (const tk of tokens) {
             const test = line + tk;

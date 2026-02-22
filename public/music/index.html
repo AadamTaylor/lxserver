@@ -89,16 +89,18 @@
         .lyric-line {
             font-family: var(--lyric-font-family, inherit);
             font-size: var(--lyric-font-size, 1.25rem);
+            line-height: 1.4;
+            /* 基础行高由内部元素撑开 */
             transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
             cursor: pointer;
             opacity: 0.6;
-            /* transform: scale(0.95); REMOVED */
             transform-origin: left center;
 
             /* Wrapping constraints */
             width: fit-content;
             max-width: 100%;
-            padding: 0 1rem;
+            padding: 0.6em 2rem 0.6em 1.5rem;
+            /* 使用 em，随字号缩放行间距 */
             box-sizing: border-box;
             white-space: normal;
             overflow-wrap: break-word;
@@ -112,10 +114,16 @@
             }
         }
 
-        /* Force center origin when cover is hidden (desktop) */
+        /* Force center origin/alignment when cover is hidden (desktop) */
         .lyrics-centered .lyric-line {
             transform-origin: center center !important;
             margin: 0 auto;
+            text-align: center !important;
+        }
+
+        .lyrics-centered .lyric-line span {
+            margin-left: auto !important;
+            margin-right: auto !important;
         }
 
         .lyric-line:hover {
@@ -126,11 +134,18 @@
             opacity: 1;
             font-weight: 800;
             color: var(--c-500);
+            z-index: 10;
+            /* 确保高亮行在最上层，阴影不被覆盖 */
+            overflow: visible;
+            /* 允许阴影和放大后的文字溢出显示 */
             /* transform: scale(1.15); REMOVED */
             font-size: calc(var(--lyric-font-size, 1.25rem) * 1.3);
         }
 
-        /* Deleted old glow for not-has-words */
+        /* 当歌词居中展示时，移除封面留下的间距占位 */
+        #player-detail-container.has-centered-lyrics {
+            gap: 0 !important;
+        }
 
         /* Karaoke Word Styles */
         .lyric-line .word-item {
@@ -175,21 +190,36 @@
             color: var(--c-500);
         }
 
-        /* 对于支持逐字的歌词的翻译/罗马音，跟随逐字进度平滑扫过 */
+        /* 对于支持逐字的歌词的翻译/罗马音，现在改为逐字点亮 */
         .lyric-line.has-words.active .extended {
-            color: transparent;
-            /* Override direct color */
-            background: linear-gradient(to right,
-                    var(--c-500) var(--line-progress, 0%),
-                    #9CA3AF var(--line-progress, 0%));
+            color: #9CA3AF;
             /* gray-400 */
+            background: none;
+            -webkit-text-fill-color: initial;
+            background-clip: initial;
+        }
+
+        .lyric-line.has-words.active .extended .ext-item {
+            display: inline-block;
+            background: linear-gradient(to right,
+                    var(--c-500) var(--word-progress, 0%),
+                    #9CA3AF var(--word-progress, 0%));
             background-clip: text;
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
+            transition: none;
+            /* 由 JS 循环控制平滑度 */
+            white-space: pre;
         }
 
-        .enable-lyric-glow .lyric-line.active .plain-lyric,
-        .enable-lyric-glow .lyric-line.active .extended {
+        /* 仅对正在点亮或已点亮的翻译字符应用荧光效果，保持 0 2px 8px 的朦胧参数 */
+        .enable-lyric-glow .lyric-line.active .extended .ext-item.playing,
+        .enable-lyric-glow .lyric-line.active .extended .ext-item.passed {
+            filter: drop-shadow(0 2px 8px var(--c-200));
+        }
+
+        /* 普通歌词(非逐字)或没有切分的歌词依然维持整体荧光 */
+        .enable-lyric-glow .lyric-line.active .plain-lyric {
             filter: drop-shadow(0 2px 8px var(--c-200));
         }
 
@@ -327,11 +357,19 @@
         }
 
         .lyric-line .font-lrc {
-            font-size: 1em !important;
+            font-size: 1.1em !important;
+            /* 基础字号略微放大 */
+            line-height: 1.4;
+            display: block;
         }
 
         .lyric-line .extended {
-            font-size: 0.7em !important;
+            font-size: 0.75em !important;
+            line-height: 1.4;
+            margin-top: 0.4em;
+            /* 翻译与原文的间距：随字号缩放 */
+            display: block;
+            opacity: 0.8;
         }
 
         /* 隐藏滚动条但保留滚动能力 */
@@ -445,6 +483,32 @@
         .select-none {
             user-select: none !important;
             -webkit-user-select: none !important;
+        }
+
+        /* Silky Animation for Player Detail */
+        #view-player-detail {
+            transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.5s ease-out !important;
+            will-change: transform, opacity;
+        }
+
+        #view-player-detail.translate-y-\[100\%\] #player-detail-container {
+            transform: scale(0.92) translateY(40px);
+            opacity: 0;
+        }
+
+        #player-detail-container {
+            transition: transform 0.8s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.6s ease-out;
+            will-change: transform, opacity;
+        }
+
+        #player-footer {
+            transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1) !important;
+            will-change: transform;
+        }
+
+        #btn-expand-panel {
+            transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.4s ease-out !important;
+            will-change: transform, opacity;
         }
     </style>
 </head>
@@ -1714,7 +1778,7 @@
 
     <!-- Player Detail View (Overlay) -->
     <div id="view-player-detail"
-        class="fixed inset-0 z-30 t-bg-panel hidden flex flex-col transition-all duration-500 transform translate-y-[100%] opacity-0 pb-24">
+        class="fixed inset-0 z-30 t-bg-panel hidden flex flex-col transform translate-y-[100%] opacity-0 pb-24">
         <!-- Blurry Background -->
         <div class="absolute inset-0 overflow-hidden">
             <img id="detail-bg-cover" src=""
@@ -1744,16 +1808,16 @@
 
             <!-- Left: Image -->
             <div id="mobile-player-cover-container"
-                class="w-auto h-auto max-w-[48vw] max-h-[32vh] [@media(max-height:500px)]:max-h-[40vh] aspect-square md:w-[28rem] md:h-[28rem] md:max-w-none md:max-h-none flex-shrink-0 shadow-[0_20px_50px_rgba(0,0,0,0.3)] rounded-3xl overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] border-4 border-white/20 origin-top t-bg-track">
+                class="w-auto h-auto max-w-[48vw] max-h-[32vh] [@media(max-height:500px)]:max-h-[40vh] aspect-square md:w-[60vh] md:h-[60vh] md:max-w-[35rem] md:max-h-[35rem] md:min-w-[20rem] md:min-h-[20rem] flex-shrink-0 shadow-[0_20px_50px_rgba(0,0,0,0.3)] rounded-3xl overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] border-4 border-white/20 origin-top t-bg-track">
                 <img id="detail-cover" src="/music/assets/logo.svg" onerror="this.src='/music/assets/logo.svg'"
                     class="w-full h-full object-cover">
             </div>
 
             <!-- Right: Lyrics -->
             <div id="lyrics-wrapper"
-                class="w-full md:w-1/2 h-full max-h-[60vh] [@media(max-height:500px)]:max-h-[50vh] flex flex-col relative transition-all duration-300">
+                class="w-full md:w-[500px] lg:w-[600px] h-full max-h-[60vh] [@media(max-height:500px)]:max-h-[50vh] flex flex-col relative transition-all duration-300 flex-shrink-0">
                 <!-- Song Info -->
-                <div class="mb-4 md:mb-8 text-center md:text-left px-4 md:px-0 cursor-pointer transition-all duration-300 active:scale-95 select-none"
+                <div class="mb-4 md:mb-8 text-center md:text-left px-4 md:pl-6 cursor-pointer transition-all duration-300 active:scale-95 select-none"
                     onclick="toggleDetailCover()" title="点击切换封面显示">
                     <div id="detail-title-container" class="w-full overflow-hidden whitespace-nowrap mb-1">
                         <div id="detail-title"
@@ -1787,7 +1851,7 @@
                     onwheel="handleLyricScroll()">
 
                     <div id="lyric-content"
-                        class="flex flex-col items-center md:items-start text-center md:text-left gap-3 md:gap-6 py-[40vh] transition-transform duration-300 ease-out">
+                        class="flex flex-col items-center md:items-start text-center md:text-left gap-3 md:gap-6 py-[40vh] md:pl-6 transition-transform duration-300 ease-out">
                         <!-- Lines injected here -->
                         <p class="t-text-muted text-lg font-medium">暂无歌词</p>
                     </div>
