@@ -297,9 +297,11 @@ const checkAndCreateDir = (p: string) => {
 }
 
 const readBody = async (req: IncomingMessage) => await new Promise<string>((resolve, reject) => {
-  let body = ''
-  req.on('data', chunk => { body += chunk })
-  req.on('end', () => { resolve(body) })
+  const chunks: any[] = []
+  req.on('data', chunk => { chunks.push(chunk) })
+  req.on('end', () => {
+    resolve(Buffer.concat(chunks).toString('utf-8'))
+  })
   req.on('error', reject)
 })
 

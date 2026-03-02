@@ -6,9 +6,12 @@ import type { IncomingMessage, ServerResponse } from 'http'
 // 读取请求体
 async function readBody(req: IncomingMessage): Promise<string> {
     return new Promise((resolve, reject) => {
-        let body = ''
-        req.on('data', chunk => { body += chunk })
-        req.on('end', () => resolve(body))
+        const chunks: any[] = []
+        req.on('data', chunk => { chunks.push(chunk) })
+        req.on('end', () => {
+            const buffer = Buffer.concat(chunks)
+            resolve(buffer.toString('utf-8'))
+        })
         req.on('error', reject)
     })
 }
@@ -196,9 +199,12 @@ export async function handleImport(req: IncomingMessage, res: ServerResponse) {
         const content = await new Promise<string>((resolve, reject) => {
             const protocol = url.startsWith('https') ? https : http
             protocol.get(url, (response: any) => {
-                let data = ''
-                response.on('data', (chunk: any) => data += chunk)
-                response.on('end', () => resolve(data))
+                const chunks: any[] = []
+                response.on('data', (chunk: any) => chunks.push(chunk))
+                response.on('end', () => {
+                    const buffer = Buffer.concat(chunks)
+                    resolve(buffer.toString('utf-8'))
+                })
                 response.on('error', reject)
             }).on('error', reject)
         })
