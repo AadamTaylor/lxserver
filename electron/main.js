@@ -5,6 +5,21 @@ const path = require('path')
 const net = require('net')
 const fs = require('fs')
 
+// ─── 单实例锁：防止打开多个后台 ──────────────────────────────────────────────
+const gotTheLock = app.requestSingleInstanceLock()
+if (!gotTheLock) {
+    app.quit()
+} else {
+    // 第二个实例启动时，聚焦已有窗口
+    app.on('second-instance', () => {
+        if (playerWindow && !playerWindow.isDestroyed()) {
+            if (playerWindow.isMinimized()) playerWindow.restore()
+            playerWindow.show()
+            playerWindow.focus()
+        }
+    })
+}
+
 // ─── 路径配置加载逻辑 ─────────────────────────────────────────────────────────
 const defaultStorageRoot = app.getPath('userData')
 const basePathConfigFile = path.join(defaultStorageRoot, 'base_path.json')
@@ -33,7 +48,8 @@ let storageRoot = null
 let SERVER_PORT = 9527
 let BASE_URL = ''
 let tray = null
-let mainWindow = null // 唯一的全局窗口
+let playerWindow = null  // 播放器窗口（常驻，关闭只隐藏）
+let adminWindow = null   // 管理后台窗口（可正常关闭）
 
 const appRoot = app.getAppPath()
 const staticPath = app.isPackaged
@@ -77,22 +93,57 @@ async function startServer() {
     }
 }
 
-// ─── 窗口管理 (单窗口模式) ─────────────────────────────────────────────────────
+// ─── 工具函数 ──────────────────────────────────────────────────────────────
 function getIcon(name) {
     const p = path.join(appRoot, 'electron', 'icons', name)
     if (fs.existsSync(p)) return nativeImage.createFromPath(p)
     return null
 }
 
-function navigateTo(type) {
-    const isPlayer = type === 'player'
-    const url = isPlayer ? `${BASE_URL}/music` : BASE_URL
-    const title = isPlayer ? 'LX Music Player' : 'LX Music Server Admin'
 
-    // 如果窗口不存在，创建它
-    if (!mainWindow || mainWindow.isDestroyed()) {
-        mainWindow = new BrowserWindow({
-            title: title,
+// ─── 播放器窗口管理（常驻，关闭只隐藏，保持音乐播放） ──────────────────────────
+function showPlayerWindow() {
+    const playerURL = `${BASE_URL}/music`
+
+    if (!playerWindow || playerWindow.isDestroyed()) {
+        playerWindow = new BrowserWindow({
+            title: 'LX Music Player',
+            width: 1200,
+            height: 850,
+            minWidth: 900,
+            minHeight: 650,
+            icon: getIcon('icon.png'),
+            autoHideMenuBar: true,
+            webPreferences: {
+                nodeIntegration: false,
+                contextIsolation: true,
+                // 禁用 CORS/混合内容安全检查，允许渲染进程 fetch/WS 连接局域网 LX Music 设备
+                webSecurity: false,
+            }
+        })
+        playerWindow.on('page-title-updated', (e) => e.preventDefault())
+        // 关闭时只隐藏，保持后台播放
+        playerWindow.on('close', (event) => {
+            if (!app.isQuiting) {
+                event.preventDefault()
+                playerWindow.hide()
+            }
+        })
+        playerWindow.loadURL(playerURL)
+    } else {
+        // 窗口已存在：若已显示且在播放器页，直接聚焦；否则 show+focus
+        playerWindow.show()
+        playerWindow.focus()
+    }
+}
+
+// ─── 管理后台窗口管理（独立窗口，不影响播放器） ────────────────────────────────
+function showAdminWindow() {
+    const adminURL = BASE_URL
+
+    if (!adminWindow || adminWindow.isDestroyed()) {
+        adminWindow = new BrowserWindow({
+            title: 'LX Music Server Admin',
             width: 1200,
             height: 850,
             minWidth: 900,
@@ -101,23 +152,19 @@ function navigateTo(type) {
             autoHideMenuBar: true,
             webPreferences: { nodeIntegration: false, contextIsolation: true }
         })
-        mainWindow.on('page-title-updated', (e) => e.preventDefault())
-
-        // 窗口关闭时只隐藏，不销毁（除非点退出）
-        mainWindow.on('close', (event) => {
-            if (!app.isQuiting) {
-                event.preventDefault()
-                mainWindow.hide()
-            }
+        adminWindow.on('page-title-updated', (e) => e.preventDefault())
+        // 管理后台直接关闭即可（不需要保持后台）
+        adminWindow.on('closed', () => {
+            adminWindow = null
         })
+        adminWindow.loadURL(adminURL)
+    } else {
+        adminWindow.show()
+        adminWindow.focus()
     }
-
-    // 在同一个窗口中加载不同的内容
-    mainWindow.loadURL(url)
-    mainWindow.show()
-    mainWindow.focus()
 }
 
+// ─── 托盘创建 ──────────────────────────────────────────────────────────────
 function createTray() {
     const icon = getIcon('tray.png') || nativeImage.createEmpty()
     tray = new Tray(icon)
@@ -127,8 +174,8 @@ function createTray() {
         { label: `● 运行中 (端口: ${SERVER_PORT})`, enabled: false },
         { label: `● 存储目录 : ${path.basename(storageRoot)}`, enabled: false },
         { type: 'separator' },
-        { label: '打开播放器', click: () => navigateTo('player') },
-        { label: '打开管理后台', click: () => navigateTo('admin') },
+        { label: '打开播放器', click: () => showPlayerWindow() },
+        { label: '打开管理后台', click: () => showAdminWindow() },
         { type: 'separator' },
         {
             label: '设置与管理',
@@ -156,7 +203,14 @@ function createTray() {
         { label: '完全退出', click: () => { app.isQuiting = true; app.quit() } },
     ])
     tray.setContextMenu(menu)
-    tray.on('click', () => navigateTo('player'))
+    // 点击托盘图标：若播放器已在前台则最小化，否则显示
+    tray.on('click', () => {
+        if (playerWindow && !playerWindow.isDestroyed() && playerWindow.isVisible() && playerWindow.isFocused()) {
+            playerWindow.hide()
+        } else {
+            showPlayerWindow()
+        }
+    })
 }
 
 // ─── App 生命周期 ─────────────────────────────────────────────────────────
@@ -179,8 +233,8 @@ app.whenReady().then(async () => {
     if (process.platform === 'darwin' && app.dock) app.dock.hide()
     createTray()
 
-    // 默认只弹一个播放器窗
-    navigateTo('player')
+    // 启动时打开播放器
+    showPlayerWindow()
 })
 
 // 托盘 App 重写退出逻辑
