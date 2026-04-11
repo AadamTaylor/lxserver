@@ -739,6 +739,14 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
       }
     }
 
+    // [Subsonic API]
+    const subsonicEnable = global.lx.config['subsonic.enable']
+    const subsonicPath = normalizePath(global.lx.config['subsonic.path'] || '/rest')
+    if (subsonicEnable && (pathname.startsWith(subsonicPath + '/') || pathname === subsonicPath)) {
+      const { subsonicHandler } = require('./subsonic')
+      return subsonicHandler.handleRequest(req, res, urlObj)
+    }
+
     // 动态 config.js - 从静态文件读取版本号, 合并服务端配置注入 window.CONFIG
     // 配置优先级: 环境变量 > 根目录 config.js > src/defaultConfig.ts
     if (pathname === '/js/config.js') {
@@ -3644,6 +3652,8 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
             'proxy.all.address': global.lx.config['proxy.all.address'] || '',
             'admin.path': global.lx.config['admin.path'] ?? '',
             'player.path': global.lx.config['player.path'] ?? '/music',
+            'subsonic.enable': global.lx.config['subsonic.enable'] ?? true,
+            'subsonic.path': global.lx.config['subsonic.path'] ?? '/rest',
           }
           res.writeHead(200, {
             'Content-Type': 'application/json',
@@ -3729,6 +3739,12 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                 global.lx.config['player.path'] = normalizedPlayer
               }
 
+              // 新增：Subsonic 配置保存逻辑
+              if (newConfig['subsonic.enable'] !== undefined) global.lx.config['subsonic.enable'] = newConfig['subsonic.enable']
+              if (newConfig['subsonic.path'] !== undefined) {
+                global.lx.config['subsonic.path'] = newConfig['subsonic.path'].replace(/\/+$/, '') || '/rest'
+              }
+
               // 更新 WebDAVSync 配置
               if (global.lx.webdavSync && (newConfig['webdav.url'] || newConfig['webdav.username'] || newConfig['webdav.password'] || newConfig['sync.interval'])) {
                 global.lx.webdavSync.updateConfig({
@@ -3760,6 +3776,8 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                 'proxy.all.address': global.lx.config['proxy.all.address'],
                 'admin.path': global.lx.config['admin.path'] ?? '',
                 'player.path': global.lx.config['player.path'] ?? '/music',
+                'subsonic.enable': global.lx.config['subsonic.enable'],
+                'subsonic.path': global.lx.config['subsonic.path'],
                 users: global.lx.config.users.map(u => ({
                   name: u.name,
                   password: u.password,

@@ -162,6 +162,8 @@ services:
       # - FRONTEND_PASSWORD=123456
       # - ENABLE_WEBPLAYER_AUTH=true
       # - WEBPLAYER_PASSWORD=yourpassword
+      # - ADMIN_PATH=
+      # - PLAYER_PATH=/music
 ```
 
 ### Option 3: Manual Run (Git Clone)
@@ -185,8 +187,8 @@ npm start
 
 ### 3. Access Info
 
-- **Web Player**: `http://your-ip:9527/music`
-- **Sync Dashboard**: `http://your-ip:9527` (Default password: `123456`)
+- **Web Player**: `http://your-ip:9527/music` (Default path, configurable via `PLAYER_PATH`)
+- **Sync Dashboard**: `http://your-ip:9527` (Default path, configurable via `ADMIN_PATH`, default password: `123456`)
 
 ---
 
@@ -196,7 +198,7 @@ Separated frontend and backend architecture based on Node.js:
 
 - **Backend (Express + WebSocket)**: Core sync logic and WebDAV backup.
 - **Console (Vanilla JS)**: Located in the root directory, handles user and data management.
-- **WebPlayer (Vanilla JS)**: Located in the `/music` directory, handles music playback.
+- **WebPlayer (Vanilla JS)**: Handles music playback, default access path is `/music`.
 
 ---
 
@@ -208,6 +210,8 @@ Edit `config.js` directly. Environment variables take precedence:
 | --- | --- | --- | --- |
 | `PORT` | `port` | Service port | `9527` |
 | `BIND_IP` | `bindIP` | Binding IP | `0.0.0.0` |
+| `ADMIN_PATH` | `admin.path` | Backend management interface path | (empty) |
+| `PLAYER_PATH` | `player.path` | Web player access path | `/music` |
 | `FRONTEND_PASSWORD` | `frontend.password` | Web dashboard password | `123456` |
 | `SERVER_NAME` | `serverName` | Sync service name | `My Sync Server` |
 | `MAX_SNAPSHOT_NUM` | `maxSnapshotNum` | Max snapshots to keep | `10` |

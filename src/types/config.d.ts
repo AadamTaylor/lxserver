@@ -146,6 +146,16 @@ declare namespace LX {
      * Web播放器访问路径，默认为 /music
      */
     'player.path'?: string
+
+    /**
+     * 是否启用 Subsonic 协议支持 (默认 true)
+     */
+    'subsonic.enable'?: boolean
+
+    /**
+     * Subsonic 访问路径 (默认 /rest)
+     */
+    'subsonic.path'?: string
   }
 }
 

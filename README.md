@@ -173,6 +173,8 @@ services:
       # - FRONTEND_PASSWORD=123456
       # - ENABLE_WEBPLAYER_AUTH=true
       # - WEBPLAYER_PASSWORD=yourpassword
+      # - ADMIN_PATH=
+      # - PLAYER_PATH=/music
 ```
 
 ### 方式三：直接运行 (Git Clone)
@@ -196,8 +198,8 @@ npm start
 
 ### 3. 访问说明
 
-- **Web 播放器**: `http://your-ip:9527/music`
-- **同步管理后台**: `http://your-ip:9527` (默认密码: `123456`)
+- **Web 播放器**: `http://your-ip:9527/music` (默认路径，可通过 `PLAYER_PATH` 修改)
+- **同步管理后台**: `http://your-ip:9527` (默认路径，可通过 `ADMIN_PATH` 修改，默认密码: `123456`)
 
 ---
 
@@ -207,7 +209,7 @@ npm start
 
 - **Backend (Express + WebSocket)**: 核心同步逻辑与 WebDAV 备份。
 - **Console (Vanilla JS)**: 位于根目录，负责用户与数据管理。
-- **WebPlayer (Vanilla JS)**: 位于 `/music` 目录，负责音乐播放业务。
+- **WebPlayer (Vanilla JS)**: 负责音乐播放业务，默认访问路径为 `/music`。
 
 ---
 
@@ -219,6 +221,8 @@ npm start
 | ---------------------------------- | -------------------------------- | --------------------------------------------------------------- | ------------------ |
 | `PORT`                           | `port`                         | 服务端口                                                        | `9527`           |
 | `BIND_IP`                        | `bindIP`                       | 绑定 IP                                                         | `0.0.0.0`        |
+| `ADMIN_PATH`                     | `admin.path`                   | 后台管理界面访问路径 (默认为空，即根路径 `/`)                    | (空)             |
+| `PLAYER_PATH`                    | `player.path`                  | Web 播放器访问路径 (默认为 `/music`)                            | `/music`         |
 | `FRONTEND_PASSWORD`              | `frontend.password`            | Web 管理界面访问密码                                            | `123456`         |
 | `SERVER_NAME`                    | `serverName`                   | 同步服务名称                                                    | `My Sync Server` |
 | `MAX_SNAPSHOT_NUM`               | `maxSnapshotNum`               | 保留的最大快照数量                                              | `10`             |

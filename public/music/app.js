@@ -1501,7 +1501,7 @@ function renderResults(list) {
 
         row.innerHTML = `
             <!-- Index -->
-            <div class="col-span-2 sm:col-span-1 text-center font-mono t-text-muted text-xs md:text-sm flex items-center justify-center">
+            <div class="col-span-1 text-center font-mono t-text-muted text-xs md:text-sm flex items-center justify-center">
                 ${window.batchMode ? `
                     <input type="checkbox" 
                            class="batch-checkbox w-4 h-4 text-emerald-600 rounded" 
@@ -1512,7 +1512,7 @@ function renderResults(list) {
             </div>
 
             <!-- Title (Image + Text) -->
-            <div class="col-span-8 sm:col-span-7 md:col-span-6 ${titleLgSpan} flex items-center overflow-hidden pr-2">
+            <div class="col-span-9 sm:col-span-7 md:col-span-6 ${titleLgSpan} flex items-center overflow-hidden pr-2">
                 <div class="relative w-10 h-10 md:w-12 md:h-12 mr-3 md:mr-4 flex-shrink-0 group cursor-pointer">
                      <img data-src="${imgUrl}" src="/music/assets/logo.svg" 
                           loading="lazy" fetchpriority="low"
@@ -1557,22 +1557,22 @@ function renderResults(list) {
             </div>
 
             <!-- Actions -->
-            <div class="col-span-2 sm:col-span-1 flex items-center justify-end gap-1 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity">
-                <button class="p-1.5 hover:bg-emerald-50 rounded-lg text-emerald-600 transition-colors" 
+            <div class="col-span-2 sm:col-span-1 flex items-center justify-end gap-0.5 sm:gap-1 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity">
+                <button class="p-1 sm:p-1.5 hover:bg-emerald-50 rounded-lg text-emerald-600 transition-colors" 
                         title="播放" 
                         onclick="event.stopPropagation(); playFromView(${actualIndexInOriginal})">
-                    <i class="fas fa-play w-4 h-4"></i>
+                    <i class="fas fa-play w-3 h-3 sm:w-4 sm:h-4"></i>
                 </button>
-                <button class="p-1.5 hover:bg-blue-50 rounded-lg text-blue-600 transition-colors" 
+                <button class="p-1 sm:p-1.5 hover:bg-blue-50 rounded-lg text-blue-600 transition-colors" 
                         title="下载" 
                         onclick="event.stopPropagation(); downloadSong(${JSON.stringify(item).replace(/"/g, '&quot;')})">
-                    <i class="fas fa-download w-4 h-4"></i>
+                    <i class="fas fa-download w-3 h-3 sm:w-4 sm:h-4"></i>
                 </button>
                 ${currentSearchScope !== 'network' ? `
-                <button class="p-1.5 hover:bg-red-50 rounded-lg text-red-600 transition-colors" 
+                <button class="p-1 sm:p-1.5 hover:bg-red-50 rounded-lg text-red-600 transition-colors" 
                         title="删除" 
                         onclick="event.stopPropagation(); deleteSingleSong('${item.id}')">
-                    <i class="fas fa-trash w-4 h-4"></i>
+                    <i class="fas fa-trash w-3 h-3 sm:w-4 sm:h-4"></i>
                 </button>
                 ` : ''}
             </div>
@@ -6773,6 +6773,7 @@ function collectCurrentSongList() {
         name: detail.info.name || '未命名歌单',
         source: detail.source,
         sourceListId: String(detail.id),
+        Album: detail.info.img || detail.info.pic || null,
         locationUpdateTime: null,
         list: listWithSource
     };
@@ -6848,7 +6849,10 @@ async function handleRefreshList(listId, event, silent = false) {
 
         // 更新列表模型
         list.list = newList;
-        if (data.info && data.info.name) list.name = data.info.name;
+        if (data.info) {
+            if (data.info.name) list.name = data.info.name;
+            if (data.info.img || data.info.pic) list.Album = data.info.img || data.info.pic;
+        }
 
         // 推送同步并重绘 UI
         await pushDataChange();

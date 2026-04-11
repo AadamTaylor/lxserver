@@ -22,6 +22,8 @@ export const ENV_PARAMS = [
   'PROXY_ALL_ADDRESS',
   'ADMIN_PATH',
   'PLAYER_PATH',
+  'SUBSONIC_ENABLE',
+  'SUBSONIC_PATH',
   'LX_USER_',
 ] as const
 

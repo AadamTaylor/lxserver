@@ -42,7 +42,8 @@ const config: LX.Config = {
   // 访问路径配置
   'admin.path': '', // 后台管理路径，默认为根路径 /
   'player.path': '/music', // 播放器路径
-
+  'subsonic.enable': true, // 是否启用 Subsonic 服务
+  'subsonic.path': '/rest', // Subsonic 访问路径
 }
 
 export default config

@@ -80,3 +80,4 @@ dist-electron/
 old/
 
 .stylelintrc.json
+reference/
