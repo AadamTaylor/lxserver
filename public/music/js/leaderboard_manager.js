@@ -26,7 +26,11 @@ window.LeaderboardManager = (function () {
     function init() {
         if (initialized) return;
         initialized = true;
-        state.source = 'wy';
+
+        // 优先从缓存读取
+        const cachedSource = localStorage.getItem('lb-source-select');
+        state.source = cachedSource || 'wy';
+
         // 同步 source select 的值
         const sel = document.getElementById('lb-source-select');
         if (sel) sel.value = state.source;
@@ -392,6 +396,10 @@ window.LeaderboardManager = (function () {
         const sel = document.getElementById('lb-source-select');
         if (!sel) return;
         state.source = sel.value;
+
+        // 保存到缓存
+        localStorage.setItem('lb-source-select', state.source);
+
         state.currentBangid = null;
         state.currentBoardName = '';
         state.songs = [];

@@ -2984,6 +2984,7 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
         const name = urlObj.searchParams.get('name') || ''
         const singer = urlObj.searchParams.get('singer') || ''
         const source = urlObj.searchParams.get('source') || 'kw'
+        const type = urlObj.searchParams.get('type') || 'song' // 新增 type 参数: song, singer, album, playlist
         const limit = parseInt(urlObj.searchParams.get('limit') || '20')
         const page = parseInt(urlObj.searchParams.get('page') || '1')
 
@@ -2995,12 +2996,36 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
           if (!musicSdk[source]) {
             throw new Error(`Source ${source} is not supported`)
           }
-          const searchData = await musicSdk[source].musicSearch.search(name, page, limit)
-          const list = searchData.list || []
 
-          fs.appendFileSync(path.join(process.cwd(), 'debug.txt'), `[Search] Source: ${source}, Query: ${name}, Result Count: ${list.length}\n`)
+          let result
+          if (type === 'song') {
+            const searchData = await musicSdk[source].musicSearch.search(name, page, limit)
+            result = searchData.list || []
+          } else if (type === 'singer') {
+            if (!musicSdk[source].extendSearch || !musicSdk[source].extendSearch.searchSinger) {
+              throw new Error(`Source ${source} does not support singer search`)
+            }
+            const searchData = await musicSdk[source].extendSearch.searchSinger(name, page, limit)
+            result = searchData.list || []
+          } else if (type === 'album') {
+            if (!musicSdk[source].extendSearch || !musicSdk[source].extendSearch.searchAlbum) {
+              throw new Error(`Source ${source} does not support album search`)
+            }
+            const searchData = await musicSdk[source].extendSearch.searchAlbum(name, page, limit)
+            result = searchData.list || []
+          } else if (type === 'playlist') {
+            if (!musicSdk[source].extendSearch || !musicSdk[source].extendSearch.searchPlaylist) {
+              throw new Error(`Source ${source} does not support playlist search`)
+            }
+            const searchData = await musicSdk[source].extendSearch.searchPlaylist(name, page, limit)
+            result = searchData.list || []
+          } else {
+            throw new Error(`Invalid search type: ${type}`)
+          }
+
+          fs.appendFileSync(path.join(process.cwd(), 'debug.txt'), `[Search] Source: ${source}, Type: ${type}, Query: ${name}, Result Count: ${result.length}\n`)
           res.writeHead(200, { 'Content-Type': 'application/json' })
-          res.end(JSON.stringify(list))
+          res.end(JSON.stringify(result))
         } catch (err: any) {
           fs.appendFileSync(path.join(process.cwd(), 'debug.txt'), `[Search Error] ${err.message}\n${err.stack}\n`)
           console.error(err)
@@ -3027,6 +3052,77 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
         } catch (err: any) {
           res.writeHead(200, { 'Content-Type': 'application/json' })
           res.end('[]')
+        }
+        return
+      }
+
+      // [新增] 获取歌手详情 API
+      if (pathname === '/api/music/artistDetail' && req.method === 'GET') {
+        const id = urlObj.searchParams.get('id')
+        const source = urlObj.searchParams.get('source') || 'wy'
+        if (!id) {
+          res.writeHead(400); res.end('Missing id'); return
+        }
+        try {
+          const data = await musicSdk[source].extendDetail.getArtistDetail(id)
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify(data))
+        } catch (err: any) {
+          res.writeHead(500); res.end(err.message)
+        }
+        return
+      }
+
+      // [新增] 获取歌手专辑列表 API
+      if (pathname === '/api/music/artistAlbums' && req.method === 'GET') {
+        const id = urlObj.searchParams.get('id')
+        const source = urlObj.searchParams.get('source') || 'wy'
+        const page = parseInt(urlObj.searchParams.get('page') || '1')
+        if (!id) {
+          res.writeHead(400); res.end('Missing id'); return
+        }
+        try {
+          const data = await musicSdk[source].extendDetail.getArtistAlbums(id, page)
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify(data))
+        } catch (err: any) {
+          res.writeHead(500); res.end(err.message)
+        }
+        return
+      }
+
+      // [新增] 获取歌手歌曲 API
+      if (pathname === '/api/music/artistSongs' && req.method === 'GET') {
+        const id = urlObj.searchParams.get('id')
+        const source = urlObj.searchParams.get('source') || 'wy'
+        const page = parseInt(urlObj.searchParams.get('page') || '1')
+        const order = urlObj.searchParams.get('order') || 'hot'
+        if (!id) {
+          res.writeHead(400); res.end('Missing id'); return
+        }
+        try {
+          const data = await musicSdk[source].extendDetail.getArtistSongs(id, page, 100, order)
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify(data.list || []))
+        } catch (err: any) {
+          res.writeHead(500); res.end(err.message)
+        }
+        return
+      }
+
+      // [新增] 获取专辑歌曲 API
+      if (pathname === '/api/music/albumSongs' && req.method === 'GET') {
+        const id = urlObj.searchParams.get('id')
+        const source = urlObj.searchParams.get('source') || 'wy'
+        if (!id) {
+          res.writeHead(400); res.end('Missing id'); return
+        }
+        try {
+          const data = await musicSdk[source].extendDetail.getAlbumSongs(id)
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify(data.list || []))
+        } catch (err: any) {
+          res.writeHead(500); res.end(err.message)
         }
         return
       }

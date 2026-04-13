@@ -32,6 +32,15 @@ window.SongListManager = (function () {
     // Initialize
     function init() {
         console.log('[SongList] Initializing...');
+
+        // 优先从缓存读取
+        const cachedSource = localStorage.getItem('songlist-source');
+        if (cachedSource) {
+            currentState.source = cachedSource;
+            const sel = document.getElementById('songlist-source');
+            if (sel) sel.value = cachedSource;
+        }
+
         renderSortTabs();
         loadTags();
         loadList();
@@ -503,6 +512,10 @@ window.SongListManager = (function () {
         },
         changeSource: function () {
             currentState.source = document.getElementById('songlist-source').value;
+
+            // 保存到缓存
+            localStorage.setItem('songlist-source', currentState.source);
+
             currentState.tagId = '';
             currentState.tagName = '全部分类';
             document.getElementById('current-tag-name').innerText = '全部分类';
