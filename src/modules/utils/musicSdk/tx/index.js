@@ -9,10 +9,13 @@ import tipSearch from './tipSearch'
 import extendDetail from './extendDetail'
 import extendSearch from './extendSearch'
 
+import userPlaylist from './userPlaylist'
+
 const tx = {
   tipSearch,
   leaderboard,
   songList,
+  userPlaylist,
   musicSearch,
   extendSearch,
   extendDetail,

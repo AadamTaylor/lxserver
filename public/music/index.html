@@ -3529,8 +3529,14 @@
 
             <!-- Body -->
             <div class="p-8 space-y-6">
+                <!-- [新增] 腾讯音源特有入口 -->
+                <div id="tx-user-playlist-entry" class="hidden text-right -mb-4">
+                    <a href="javascript:void(0)" onclick="window.SongListManager.openQQInputModal()"
+                        class="text-xs text-emerald-500 hover:text-emerald-600 transition-colors">QQ号添加 -></a>
+                </div>
+
                 <div class="flex gap-4">
-                    <select id="external-list-source"
+                    <select id="external-list-source" onchange="window.SongListManager.onExternalSourceChange()"
                         class="p-3 border t-border-main rounded-xl t-bg-main text-sm focus:ring-2 focus:ring-emerald-400 focus:outline-none min-w-[120px]">
                         <option value="wy">网易音乐</option>
                         <option value="tx">腾讯音乐</option>
@@ -3570,6 +3576,54 @@
                         立即打开
                     </button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- QQ ID Input Modal -->
+    <div id="qq-input-modal"
+        class="fixed inset-0 bg-black/40 z-[80] hidden items-center justify-center backdrop-blur-sm transition-opacity duration-300">
+        <div class="t-bg-panel rounded-2xl w-full max-w-sm flex flex-col shadow-2xl transform transition-all duration-300 scale-95 opacity-0 overflow-hidden"
+            id="qq-input-modal-content">
+            <div class="p-6 border-b t-border-main flex justify-between items-center t-bg-main">
+                <h3 class="text-lg font-bold t-text-main">通过 QQ 号拉取歌单</h3>
+                <button onclick="window.SongListManager.closeQQInputModal()"
+                    class="t-text-muted hover:text-red-500 transition-colors p-2">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="p-6 space-y-4">
+                <input type="text" id="qq-input-field" placeholder="请输入 QQ 号"
+                    class="w-full p-3 border t-border-main rounded-xl t-bg-main text-sm focus:ring-2 focus:ring-emerald-400 focus:outline-none">
+                <button onclick="window.SongListManager.handleQQSubmit()"
+                    class="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-bold transition-all shadow-lg active:scale-95">
+                    立即获取
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- User Playlist Selection Modal -->
+    <div id="user-playlist-modal"
+        class="fixed inset-0 bg-black/40 z-[90] hidden items-center justify-center backdrop-blur-sm transition-opacity duration-300">
+        <div class="t-bg-panel rounded-2xl w-full max-w-lg flex flex-col shadow-2xl transform transition-all duration-300 scale-95 opacity-0 overflow-hidden max-h-[80vh]"
+            id="user-playlist-modal-content">
+            <div class="p-6 border-b t-border-main flex justify-between items-center t-bg-main">
+                <div class="flex items-center gap-4">
+                    <img id="user-playlist-avatar" src=""
+                        class="hidden w-12 h-12 rounded-full border-2 border-emerald-400/30 object-cover">
+                    <div class="flex-1">
+                        <h3 class="text-xl font-bold t-text-main" id="user-playlist-title">选择歌单</h3>
+                        <p class="text-xs t-text-muted mt-0.5" id="user-playlist-subtitle">加载中...</p>
+                    </div>
+                </div>
+                <button onclick="window.SongListManager.closeUserPlaylistModal()"
+                    class="t-text-muted hover:text-red-500 transition-colors p-2">
+                    <i class="fas fa-times text-lg"></i>
+                </button>
+            </div>
+            <div class="p-4 overflow-y-auto space-y-2" id="user-playlist-container">
+                <!-- Playlists will be rendered here -->
             </div>
         </div>
     </div>
