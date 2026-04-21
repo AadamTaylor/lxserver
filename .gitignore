@@ -67,7 +67,7 @@ knowledge
 lx-music-desktop-master
 debug.txt
 
-cache
+/cache
 
 # VitePress
 docs/.vitepress/dist
@@ -77,10 +77,10 @@ docs/node_modules
 # Electron build outputs (CI-generated)
 dist-electron/
 
-tests/
+/tests/
 
 .stylelintrc.json
-reference/
-music/
+/reference/
+/music/
 
-public/music/bin
+/public/music/bin
