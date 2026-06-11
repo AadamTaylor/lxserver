@@ -116,6 +116,7 @@ const DEFAULT_SETTINGS = {
     playerBackground: 'blur', // 播放页背景: 'blur', 'solid', 'dark'
     saveAccountSettingsToFile: true, // 同步账号设置到文件 (默认开启)
     autoUpdateNetworkList: false, // 自动更新网络歌单 (默认关闭)
+    networkListAutoCheckInterval: '6h', // 网络歌单自动检测间隔
     preferServerCache: true, // 优先播放缓存歌曲 (默认开启)
     remoteSyncUrl: '', // 远程同步地址
     remoteSyncCode: '', // 远程同步连接码
@@ -145,6 +146,110 @@ try {
     console.error('[Settings] 加载设置失败:', e);
 }
 window.settings = settings; // 显式挂载到 window
+window.networkListUpdateMap = new Set();
+let networkListAutoCheckTimer = null;
+
+function parseNetworkListAutoCheckInterval(value) {
+    if (value === undefined || value === null) return 0;
+    const raw = String(value).trim().toLowerCase();
+    if (raw === '' || raw === '0' || raw === 'off' || raw === 'none' || raw === 'disable') return 0;
+    const matched = raw.match(/^(\d+(?:\.\d+)?)(ms|s|m|h|d)?$/);
+    if (!matched) return null;
+    const count = parseFloat(matched[1]);
+    const unit = matched[2] || 'h';
+    if (!Number.isFinite(count) || count < 0) return null;
+    switch (unit) {
+        case 'ms': return count;
+        case 's': return count * 1000;
+        case 'm': return count * 60 * 1000;
+        case 'h': return count * 60 * 60 * 1000;
+        case 'd': return count * 24 * 60 * 60 * 1000;
+        default: return null;
+    }
+}
+
+function setupNetworkListAutoCheck() {
+    if (networkListAutoCheckTimer) {
+        clearInterval(networkListAutoCheckTimer);
+        networkListAutoCheckTimer = null;
+    }
+    if (!settings.autoUpdateNetworkList) {
+        return;
+    }
+    const intervalMs = parseNetworkListAutoCheckInterval(settings.networkListAutoCheckInterval);
+    if (intervalMs === null || intervalMs <= 0) {
+        return;
+    }
+    networkListAutoCheckTimer = setInterval(() => {
+        checkNetworkListUpdates().catch(err => console.error('[AutoCheck] 网络歌单检测失败:', err));
+    }, intervalMs);
+    console.log('[AutoCheck] 已设置网络歌单自动检测间隔：', settings.networkListAutoCheckInterval, '(', intervalMs, 'ms )');
+}
+
+async function checkNetworkListUpdates(manual = false) {
+    if (!currentListData || !Array.isArray(currentListData.userList) || currentListData.userList.length === 0) {
+        if (manual && window.showToast) showToast('info', '当前没有可检查的网络歌单', 3000);
+        return;
+    }
+
+    const targetLists = currentListData.userList.filter(l => l && l.sourceListId && l.source);
+    if (targetLists.length === 0) {
+        if (manual && window.showToast) showToast('info', '当前没有可检查的网络歌单', 3000);
+        return;
+    }
+
+    const changedLists = [];
+    const failedLists = [];
+
+    for (const list of targetLists) {
+        try {
+            const url = `${API_BASE}/songList/detail?source=${list.source}&id=${encodeURIComponent(list.sourceListId)}&page=1`;
+            const res = await fetch(url);
+            const data = await res.json();
+            if (!data || !Array.isArray(data.list)) {
+                throw new Error('远端歌单数据不完整');
+            }
+
+            const remoteList = data.list.map(item => {
+                const formatted = formatSongToLxMusicStandard(item);
+                if (!formatted.source) formatted.source = list.source;
+                return formatted;
+            });
+
+            const localList = Array.isArray(list.list) ? list.list : [];
+            const sameLength = localList.length === remoteList.length;
+            const sameIds = sameLength && localList.every((item, index) => item && remoteList[index] && String(item.id || '') === String(remoteList[index].id || '') && String(item.source || '') === String(remoteList[index].source || ''));
+            if (!sameIds) {
+                window.networkListUpdateMap.add(list.id);
+                changedLists.push(list.name || list.id || list.sourceListId);
+            } else {
+                window.networkListUpdateMap.delete(list.id);
+            }
+        } catch (err) {
+            console.error('[CheckNetworkListUpdates] 检查失败:', list.name || list.id || list.sourceListId, err);
+            failedLists.push(list.name || list.id || list.sourceListId);
+        }
+    }
+
+    if (typeof renderMyLists === 'function') {
+        renderMyLists(currentListData);
+    }
+
+    if (manual) {
+        if (changedLists.length > 0) {
+            showSuccess(`检测到 ${changedLists.length} 个歌单已更新：${changedLists.join('、')}`);
+        } else {
+            showSuccess('所有网络歌单均为最新状态');
+        }
+        if (failedLists.length > 0) {
+            showError(`部分歌单检测失败：${failedLists.join('、')}`);
+        }
+    } else if (changedLists.length > 0 && window.showToast) {
+        showToast('info', `检测到 ${changedLists.length} 个网络歌单有更新`, 5000);
+    }
+}
+
+window.checkNetworkListUpdates = checkNetworkListUpdates;
 
 
 
@@ -4934,6 +5039,7 @@ function loadSettings() {
 
     // 同步 UI 状态
     syncSettingsUI();
+    setupNetworkListAutoCheck();
 }
 
 // ========== 键盘快捷键逻辑 ==========
@@ -5092,6 +5198,13 @@ async function updateSetting(key, value) {
     }
     // 实时同步 UI 并应用效果
     syncSettingsUI(key, value);
+    if (key === 'networkListAutoCheckInterval' || key === 'autoUpdateNetworkList') {
+        const intervalMs = parseNetworkListAutoCheckInterval(settings.networkListAutoCheckInterval);
+        if (key === 'networkListAutoCheckInterval' && intervalMs === null) {
+            showError('无效的自动检测间隔，请使用 30m / 6h / 1d 等格式');
+        }
+        setupNetworkListAutoCheck();
+    }
 
     // [New] Push to server if enabled
     if (settings.saveAccountSettingsToFile) {
@@ -5256,6 +5369,7 @@ const SETTINGS_UI_MAP = {
 
     // 系统 & 网络 (System & Network)
     autoUpdateNetworkList: { id: 'setting-auto-update-list', type: 'checkbox' },
+    networkListAutoCheckInterval: { id: 'setting-network-list-auto-check-interval', type: 'value' },
     saveAccountSettingsToFile: { id: 'setting-save-settings-to-file', type: 'checkbox' },
     enableLyricCache: { id: 'setting-enable-lyric-cache', type: 'checkbox' },
     enableSongUrlCache: { id: 'setting-enable-url-cache', type: 'checkbox' },
@@ -8188,6 +8302,9 @@ function renderMyLists(data) {
         const showExternalOps = listObj && listObj.sourceListId && listObj.source;
         let opsHtml = '';
         if (showExternalOps) {
+            const updateBadge = window.networkListUpdateMap && window.networkListUpdateMap.has(id)
+                ? `<span class="inline-flex items-center justify-center w-4 h-4 rounded-full bg-rose-500 text-white text-[10px] font-bold mr-2" title="歌单有更新">!</span>`
+                : '';
             opsHtml = `
                 <i class="fas fa-sync-alt refresh-btn text-gray-400 hover:text-emerald-500 hidden group-hover:block flex-shrink-0 text-[10px] mr-2 transition-all active:rotate-180" 
                    title="更新歌单内容" 
@@ -8195,6 +8312,7 @@ function renderMyLists(data) {
                 <i class="fas fa-external-link-alt jump-btn text-gray-400 hover:text-emerald-500 hidden group-hover:block flex-shrink-0 text-[10px] mr-2 transition-all" 
                    title="打开原始歌单" 
                    onclick="event.stopPropagation(); handleJumpToOriginalList('${id}', event)"></i>
+                ${updateBadge}
             `;
         }
 
@@ -8664,6 +8782,11 @@ async function handleRefreshList(listId, event, silent = false) {
         if (data.info) {
             if (data.info.name) list.name = data.info.name;
             if (data.info.img || data.info.pic) list.Album = data.info.img || data.info.pic;
+        }
+
+        // 清除该列表的更新标记
+        if (window.networkListUpdateMap) {
+            window.networkListUpdateMap.delete(listId);
         }
 
         // 推送同步并重绘 UI
