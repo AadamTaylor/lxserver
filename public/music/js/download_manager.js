@@ -161,15 +161,18 @@ class DownloadManager {
         if (!task || !task.isServer || task.status !== 'finished') return;
 
         // [优化] 如果已经有结果，或者重试超过 3 次，则不再请求
-        if (task.hasLyric !== undefined || (task.lyricRetryCount || 0) >= 3) return;
+        if ((task.hasLyric === true || task.hasLyric === false) || (task.lyricRetryCount || 0) >= 3) return;
 
         try {
             // 记录重试次数
             task.lyricRetryCount = (task.lyricRetryCount || 0) + 1;
 
-            const song = task.song;
-            const songId = song.songmid || song.songId || song.id;
-            const url = `/api/music/cache/lyric?source=${song.source}&songmid=${song.songmid || ''}&songId=${song.id || ''}`;
+            const song = task.song || {};
+            const meta = song.meta || {};
+            const source = song.source || meta.source || '';
+            const songmid = song.songmid || song.songId || meta.songmid || meta.songId || song.id || '';
+            const songId = song.id || song.songId || meta.songId || songmid;
+            const url = `/api/music/cache/lyric?source=${encodeURIComponent(source)}&songmid=${encodeURIComponent(songmid)}&songId=${encodeURIComponent(songId || '')}&name=${encodeURIComponent(song.name || meta.songName || '')}&singer=${encodeURIComponent(song.singer || meta.singerName || '')}`;
 
             // [修复] 补全认证请求头
             const headers = {
@@ -411,6 +414,7 @@ class DownloadManager {
                     url: rawUrl, 
                     quality, 
                     enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false,
+                    cacheLyric: window.settings?.enableServerLyricCache !== false,
                     embedLyric: !!(window.settings?.embedLyricToFile ?? true)
                 })
             });
@@ -725,7 +729,7 @@ class DownloadManager {
                     const res = await fetch('/api/music/cache/download', {
                         method: 'POST',
                         headers,
-                        body: JSON.stringify({ songInfo: task.song, url: rawUrl, quality, enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false })
+                        body: JSON.stringify({ songInfo: task.song, url: rawUrl, quality, enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false, cacheLyric: window.settings?.enableServerLyricCache !== false, embedLyric: !!(window.settings?.embedLyricToFile ?? true) })
                     });
                     if (!res.ok) throw new Error('服务器拒绝请求');
 
@@ -829,7 +833,7 @@ class DownloadManager {
                         const res = await fetch('/api/music/cache/download', {
                             method: 'POST',
                             headers,
-                            body: JSON.stringify({ songInfo: t.song, url: rawUrl, quality, enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false })
+                            body: JSON.stringify({ songInfo: t.song, url: rawUrl, quality, enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false, cacheLyric: window.settings?.enableServerLyricCache !== false, embedLyric: !!(window.settings?.embedLyricToFile ?? true) })
                         });
                         if (!res.ok) throw new Error('服务器拒绝缓存');
 

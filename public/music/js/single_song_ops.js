@@ -103,12 +103,20 @@ async function requestServerLyricCache(song, quality = null, force = false) {
 
     console.log(`[Lyric] 尝试同步下载歌词缓存: ${song.name} (${quality || 'auto'})`);
     try {
-        const source = song.source;
-        const songmid = song.songmid;
-        const name = encodeURIComponent(song.name);
-        const singer = encodeURIComponent(song.singer);
-        const hash = song.hash || '';
-        const interval = song.interval || '';
+        const meta = song.meta || {};
+        const source = song.source || meta.source || '';
+        const songmid = song.songmid || song.songId || meta.songmid || meta.songId || song.id || '';
+        const nameValue = song.name || meta.songName || '';
+        const singerValue = song.singer || meta.singerName || '';
+        const name = encodeURIComponent(nameValue);
+        const singer = encodeURIComponent(singerValue);
+        const hash = song.hash || meta.hash || '';
+        const interval = song.interval || meta.interval || '';
+
+        if (!source || !songmid) {
+            console.warn('[Lyric] 歌曲缺少必要字段，跳过歌词缓存同步:', song);
+            return;
+        }
 
         // 1. 先尝试获取歌词数据
         const lyricUrl = `/api/music/lyric?source=${source}&songmid=${songmid}&name=${name}&singer=${singer}&hash=${hash}&interval=${interval}`;
@@ -126,7 +134,16 @@ async function requestServerLyricCache(song, quality = null, force = false) {
         };
 
         // 构建包含音质信息的 songInfo
-        const songInfoForCache = { ...song };
+        const songInfoForCache = {
+            ...song,
+            source,
+            songmid,
+            songId: song.songId || meta.songId || songmid,
+            name: nameValue,
+            singer: singerValue,
+            hash,
+            interval
+        };
         if (quality) songInfoForCache.quality = quality;
 
         const enableOnlyDownloadMode = window.settings?.enableOnlyDownloadMode || false;
