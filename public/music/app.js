@@ -2726,12 +2726,20 @@ async function resolveSongUrl(song, quality, isSilent = false, isRetry = false, 
             } else if (step === 'switch_platform') {
                 if (!isSilent) {
                     console.log(`[AutoSource] 原始源解析失败，准备尝试全网匹配: ${song.name}`);
-                    const matchedSong = await findOtherSourceMatch(song);
-                    if (matchedSong) {
+                }
+                const matchedSong = await findOtherSourceMatch(song, isSilent);
+                if (matchedSong) {
+                    if (!isSilent) {
                         showInfo(`找到备选源，尝试从 ${getSourceName(matchedSong.source)} 播放...`);
-                        const bestNextQuality = window.QualityManager.getBestQuality(matchedSong, settings.preferredQuality || '320k');
-                        return await fetchSongUrl(matchedSong, bestNextQuality, true, isSilent);
                     }
+                    const bestNextQuality = window.QualityManager.getBestQuality(matchedSong, settings.preferredQuality || '320k');
+                    const matchedResult = await fetchSongUrl(matchedSong, bestNextQuality, true, isSilent);
+                    return {
+                        ...matchedResult,
+                        songInfo: matchedSong,
+                        switchedSource: true,
+                        originalSource: song.source
+                    };
                 }
             }
         }
@@ -2744,7 +2752,7 @@ async function resolveSongUrl(song, quality, isSilent = false, isRetry = false, 
  * 跨平台寻找相同歌曲的匹配逻辑
  * 基本规则：歌名+歌手+时长匹配
  */
-async function findOtherSourceMatch(song) {
+async function findOtherSourceMatch(song, isSilent = false) {
     if (!song.name || !song.singer) return null;
 
     try {
@@ -2775,7 +2783,7 @@ async function findOtherSourceMatch(song) {
         // 4. 如果发现没有其他支持的平台可供切换
         if (searchSources.length === 0) {
             console.log(`[AutoSource] 换源跳过：没有其他自定义源支持的平台。当前源: ${song.source}`);
-            showError('未找到自定义源下支持的平台下的对应歌曲');
+            if (!isSilent) showError('未找到自定义源下支持的平台下的对应歌曲');
             return null;
         }
 
@@ -2783,7 +2791,7 @@ async function findOtherSourceMatch(song) {
         const headers = { 'Content-Type': 'application/json' };
         Object.assign(headers, getUserAuthHeaders());
 
-        showInfo('正在自动尝试换源匹配...');
+        if (!isSilent) showInfo('正在自动尝试换源匹配...');
 
         const searchPromises = searchSources.map(s =>
             fetch(`${API_BASE}/search?name=${encodeURIComponent(query)}&source=${s}&page=1`, { headers })
@@ -3017,6 +3025,7 @@ async function fetchSongUrl(song, quality, isRetry = false, isSilent = false) {
                 sourceType: 'normal',
                 quality: result.type || quality,
                 sourceName: result.sourceName,
+                songInfo: song,
                 errorMsg: result.errorMsg
             };
         }
@@ -12308,5 +12317,3 @@ document.addEventListener('click', (e) => {
 document.addEventListener('DOMContentLoaded', () => {
     window.CustomSelectManager.initAll();
 });
-
-

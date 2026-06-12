@@ -27,6 +27,17 @@ class DownloadManager {
         this.restoreTasks();
     }
 
+    extractRawDownloadUrl(url) {
+        if (!url || !url.startsWith('/api/music/download')) return url;
+        try {
+            const proxyParams = new URLSearchParams(url.includes('?') ? url.split('?')[1] : '');
+            const extracted = proxyParams.get('url');
+            return extracted ? decodeURIComponent(extracted) : url;
+        } catch (e) {
+            return url;
+        }
+    }
+
     // Update max concurrency limit dynamically
     updateMaxConcurrent(value) {
         console.log('[DownloadManager] Concurrency limit updated to:', value);
@@ -391,13 +402,13 @@ class DownloadManager {
             const result = await resolveSongUrl(task.song, quality, true, true);
             if (!result || !result.url) throw new Error('解析失败');
 
-
-            let rawUrl = result.url;
-            if (rawUrl.startsWith('/api/music/download')) {
-                const proxyParams = new URLSearchParams(rawUrl.includes('?') ? rawUrl.split('?')[1] : '');
-                const extracted = proxyParams.get('url');
-                if (extracted) rawUrl = decodeURIComponent(extracted);
+            const resolvedSong = result.songInfo || task.song;
+            if (resolvedSong !== task.song) {
+                task.song = resolvedSong;
+                this.renderTask(task);
             }
+
+            let rawUrl = this.extractRawDownloadUrl(result.url);
             if (!rawUrl.startsWith('http')) throw new Error('无法获取有效的外部下载地址');
 
             // 2. Post to backend
@@ -407,7 +418,7 @@ class DownloadManager {
                 method: 'POST',
                 headers,
                 body: JSON.stringify({ 
-                    songInfo: task.song, 
+                    songInfo: resolvedSong,
                     url: rawUrl, 
                     quality, 
                     enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false,
@@ -464,23 +475,18 @@ class DownloadManager {
                     if (path.includes('.')) ext = path.split('.').pop();
                 } catch (e) { }
             } else {
-                // 2. 无缓存，向原站解析 URL
-                const headers = { 'Content-Type': 'application/json', ...(window.getUserAuthHeaders ? window.getUserAuthHeaders() : {}) };
+                if (typeof resolveSongUrl !== 'function') throw new Error('resolveSongUrl missing');
+                const resolveData = await resolveSongUrl(task.song, quality, true, true);
+                if (!resolveData || !resolveData.url) throw new Error('No download URL found');
 
-                const resolveRes = await fetch('/api/music/url', {
-                    method: 'POST',
-                    headers,
-                    body: JSON.stringify({ songInfo: task.song, quality }),
-                    signal: task.controller.signal
-                });
-
-                if (!resolveRes.ok) throw new Error('Failed to resolve URL');
-                const resolveData = await resolveRes.json();
-
-                if (!resolveData.url) throw new Error('No download URL found');
+                const resolvedSong = resolveData.songInfo || task.song;
+                if (resolvedSong !== task.song) {
+                    task.song = resolvedSong;
+                    this.renderTask(task);
+                }
 
                 finalUrl = resolveData.url;
-                ext = resolveData.type || 'mp3';
+                ext = resolveData.quality || resolveData.type || 'mp3';
                 if (ext.startsWith('flac')) ext = 'flac'; // Handle flac24bit -> flac
                 if (ext === '128k' || ext === '320k') ext = 'mp3';
             }
@@ -508,6 +514,7 @@ class DownloadManager {
 
             // [优化] 如果是本地缓存文件，不需要经过下载代理（已经有标签了）
             const isLocalCache = finalUrl.startsWith('/api/music/cache/file');
+            finalUrl = this.extractRawDownloadUrl(finalUrl);
 
             if (shouldProxyDownload && !finalUrl.startsWith('/api/music/download') && !isLocalCache) {
                 // Add metadata for tagging — 用 albumName 优先（playlist 字段），album 为兼容备选
@@ -711,13 +718,14 @@ class DownloadManager {
                     const result = await resolveSongUrl(task.song, quality, true, true);
                     if (!result || !result.url) throw new Error('获取播放地址失败');
 
-                    // [Fix] 还原代理 URL 为原始外部 URL
-                    let rawUrl = result.url;
-                    if (rawUrl.startsWith('/api/music/download')) {
-                        const proxyParams = new URLSearchParams(rawUrl.includes('?') ? rawUrl.split('?')[1] : '');
-                        const extracted = proxyParams.get('url');
-                        if (extracted) rawUrl = decodeURIComponent(extracted);
+                    const resolvedSong = result.songInfo || task.song;
+                    if (resolvedSong !== task.song) {
+                        task.song = resolvedSong;
+                        this.renderTask(task);
                     }
+
+                    // [Fix] 还原代理 URL 为原始外部 URL
+                    let rawUrl = this.extractRawDownloadUrl(result.url);
                     if (!rawUrl.startsWith('http')) throw new Error('无法获取有效的外部下载地址');
 
                     const headers = { 'Content-Type': 'application/json', ...(window.getUserAuthHeaders ? window.getUserAuthHeaders() : {}) };
@@ -725,7 +733,7 @@ class DownloadManager {
                     const res = await fetch('/api/music/cache/download', {
                         method: 'POST',
                         headers,
-                        body: JSON.stringify({ songInfo: task.song, url: rawUrl, quality, enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false })
+                        body: JSON.stringify({ songInfo: resolvedSong, url: rawUrl, quality, enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false })
                     });
                     if (!res.ok) throw new Error('服务器拒绝请求');
 
@@ -815,13 +823,14 @@ class DownloadManager {
                         const result = await resolveSongUrl(t.song, quality, true, true);
                         if (!result || !result.url) throw new Error('获取地址失败');
 
-                        // [Fix] 还原代理 URL 为原始外部 URL
-                        let rawUrl = result.url;
-                        if (rawUrl.startsWith('/api/music/download')) {
-                            const proxyParams = new URLSearchParams(rawUrl.includes('?') ? rawUrl.split('?')[1] : '');
-                            const extracted = proxyParams.get('url');
-                            if (extracted) rawUrl = decodeURIComponent(extracted);
+                        const resolvedSong = result.songInfo || t.song;
+                        if (resolvedSong !== t.song) {
+                            t.song = resolvedSong;
+                            this.renderTask(t);
                         }
+
+                        // [Fix] 还原代理 URL 为原始外部 URL
+                        let rawUrl = this.extractRawDownloadUrl(result.url);
                         if (!rawUrl.startsWith('http')) throw new Error('无法获取有效的外部下载地址');
 
                         const headers = { 'Content-Type': 'application/json', ...(window.getUserAuthHeaders ? window.getUserAuthHeaders() : {}) };
@@ -829,7 +838,7 @@ class DownloadManager {
                         const res = await fetch('/api/music/cache/download', {
                             method: 'POST',
                             headers,
-                            body: JSON.stringify({ songInfo: t.song, url: rawUrl, quality, enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false })
+                            body: JSON.stringify({ songInfo: resolvedSong, url: rawUrl, quality, enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false })
                         });
                         if (!res.ok) throw new Error('服务器拒绝缓存');
 
