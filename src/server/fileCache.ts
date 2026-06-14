@@ -1239,7 +1239,7 @@ export const saveLyricCache = (songInfo: any, lyricsObj: any, username?: string,
     }
 }
 
-export const downloadAndCache = async (songInfo: any, url: string, quality?: string, username?: string, signal?: AbortSignal, isOnlyDownload?: boolean, shouldEmbedLyric: boolean = true) => {
+export const downloadAndCache = async (songInfo: any, url: string, quality?: string, username?: string, signal?: AbortSignal, isOnlyDownload?: boolean, shouldCacheLyric: boolean = true, shouldEmbedLyric: boolean = true) => {
     const dir = ensureDir(username, isOnlyDownload)
     const baseName = getFileName(songInfo, quality, isOnlyDownload, username)
     const tempPath = path.join(dir, baseName + '.tmp')
@@ -1368,22 +1368,29 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
                         tagger.dispose()
                     } catch (e) { }
 
-                    // [新增] 嵌入歌词 USLT 标签（根据 shouldEmbedLyric 判断）
-                    if (shouldEmbedLyric && _lyricFetcher) {
+                    if ((shouldCacheLyric || shouldEmbedLyric) && _lyricFetcher) {
                         try {
                             const lyricText = await _lyricFetcher({ ...songInfo, quality })
                             if (lyricText) {
-                                const tagger2 = new MusicTagger()
-                                tagger2.loadPath(finalPath)
-                                tagger2.lyrics = lyricText
-                                tagger2.save()
-                                tagger2.dispose()
-                                console.log(`[FileCache] USLT lyric embedded for: ${metadata.name}`)
-                                // [新增] 同步更新索引中的 hasEmbedLyric 状态
-                                const finalItem = indexManager.get(normalizedUsername, id, folderType, quality || 'unknown')
-                                if (finalItem) { (finalItem as any).hasEmbedLyric = true }
+                                const lyricsObj = parseLyrics(lyricText)
+                                if (shouldCacheLyric) {
+                                    saveLyricCache({ ...songInfo, quality }, lyricsObj, username, isOnlyDownload)
+                                }
+                                if (shouldEmbedLyric) {
+                                    const tagger2 = new MusicTagger()
+                                    tagger2.loadPath(finalPath)
+                                    tagger2.lyrics = lyricText
+                                    tagger2.save()
+                                    tagger2.dispose()
+                                    console.log(`[FileCache] USLT lyric embedded for: ${metadata.name}`)
+                                    const finalItem = indexManager.get(normalizedUsername, id, folderType, quality || 'unknown')
+                                    if (finalItem) {
+                                        ;(finalItem as any).hasEmbedLyric = true
+                                        indexManager.save(normalizedUsername, folderType)
+                                    }
+                                }
                             }
-                        } catch (e) { /* 歌词写入失败不影响缓存结果 */ }
+                        } catch (e) { /* Lyric cache/embed failure must not fail the audio cache. */ }
                     }
 
                     cacheProgress.set(songKey, { progress: 100, status: 'finished' })
@@ -1894,4 +1901,3 @@ export const categorizeFiles = async (filenames: string[], targetSubPath: string
     indexManager.save(normalizedUsername, folder)
     return { successCount, failCount }
 }
-

@@ -2329,7 +2329,7 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
       if (pathname === '/api/music/cache/download' && req.method === 'POST') {
         void readBody(req).then(body => {
           try {
-            const { songInfo, url, quality, enableOnlyDownloadMode, embedLyric } = JSON.parse(body)
+            const { songInfo, url, quality, enableOnlyDownloadMode, cacheLyric, embedLyric } = JSON.parse(body)
             if (!songInfo || !url) {
               res.writeHead(400)
               res.end('Missing params')
@@ -2362,7 +2362,7 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
             }
             userTasks.push({ songKey, controller })
 
-            void fileCache.downloadAndCache(songInfo, url, quality, username, controller.signal, !!enableOnlyDownloadMode, embedLyric !== false)
+            void fileCache.downloadAndCache(songInfo, url, quality, username, controller.signal, !!enableOnlyDownloadMode, cacheLyric !== false, embedLyric !== false)
               .then(() => console.log(`[Cache] Downloaded ${songInfo.name} for ${username || '_open'}`))
               .catch((err: any) => {
                 if (err.message === 'Aborted') {
