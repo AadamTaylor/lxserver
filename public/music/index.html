@@ -1689,6 +1689,26 @@
                                         </label>
                                     </div>
 
+                                    <div class="grid grid-cols-1 gap-3 md:grid-cols-[1fr_auto] md:items-center">
+                                        <div>
+                                            <div class="text-sm font-bold t-text-main">网络歌单自动检测间隔</div>
+                                            <div class="text-xs t-text-muted mt-1">输入值示例：30m / 6h / 1d，开启后自动检测并标记已更新歌单。</div>
+                                        </div>
+                                        <input id="setting-network-list-auto-check-interval" type="text"
+                                            class="w-full md:w-40 rounded-xl border t-border-main px-3 py-2 text-sm bg-transparent focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                                            onchange="updateSetting('networkListAutoCheckInterval', this.value)">
+                                    </div>
+                                    <div class="flex items-center justify-between">
+                                        <div>
+                                            <div class="text-sm font-bold t-text-main">检查所有歌单更新</div>
+                                            <div class="text-xs t-text-muted mt-1">手动触发一次网络歌单更新检测，结果会在侧边栏中显示。</div>
+                                        </div>
+                                        <button type="button" onclick="checkNetworkListUpdates(true)"
+                                            class="px-4 py-2 rounded-xl bg-emerald-500 text-white text-sm font-medium hover:bg-emerald-600 transition-all">
+                                            立即检查
+                                        </button>
+                                    </div>
+
                                     <!-- [Renamed] Save Settings to Server Toggle -->
                                     <div class="flex items-center justify-between">
                                         <div>

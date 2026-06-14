@@ -1,0 +1,225 @@
+[1mdiff --git a/.dockerignore b/.dockerignore[m
+[1mindex f23b589..f863e81 100644[m
+[1m--- a/.dockerignore[m
+[1m+++ b/.dockerignore[m
+[36m@@ -5,4 +5,4 @@[m [mdata[m
+ logs[m
+ lx-music-desktop-master[m
+ dist-electron[m
+[31m-build[m
+[32m+[m[32mbuild[m
+\ No newline at end of file[m
+[1mdiff --git a/public/music/app.js b/public/music/app.js[m
+[1mindex e742287..73374e0 100644[m
+[1m--- a/public/music/app.js[m
+[1m+++ b/public/music/app.js[m
+[36m@@ -116,6 +116,7 @@[m [mconst DEFAULT_SETTINGS = {[m
+     playerBackground: 'blur', // 播放页背景: 'blur', 'solid', 'dark'[m
+     saveAccountSettingsToFile: true, // 同步账号设置到文件 (默认开启)[m
+     autoUpdateNetworkList: false, // 自动更新网络歌单 (默认关闭)[m
+[32m+[m[32m    networkListAutoCheckInterval: '6h', // 网络歌单自动检测间隔[m
+     preferServerCache: true, // 优先播放缓存歌曲 (默认开启)[m
+     remoteSyncUrl: '', // 远程同步地址[m
+     remoteSyncCode: '', // 远程同步连接码[m
+[36m@@ -145,6 +146,110 @@[m [mtry {[m
+     console.error('[Settings] 加载设置失败:', e);[m
+ }[m
+ window.settings = settings; // 显式挂载到 window[m
+[32m+[m[32mwindow.networkListUpdateMap = new Set();[m
+[32m+[m[32mlet networkListAutoCheckTimer = null;[m
+[32m+[m
+[32m+[m[32mfunction parseNetworkListAutoCheckInterval(value) {[m
+[32m+[m[32m    if (value === undefined || value === null) return 0;[m
+[32m+[m[32m    const raw = String(value).trim().toLowerCase();[m
+[32m+[m[32m    if (raw === '' || raw === '0' || raw === 'off' || raw === 'none' || raw === 'disable') return 0;[m
+[32m+[m[32m    const matched = raw.match(/^(\d+(?:\.\d+)?)(ms|s|m|h|d)?$/);[m
+[32m+[m[32m    if (!matched) return null;[m
+[32m+[m[32m    const count = parseFloat(matched[1]);[m
+[32m+[m[32m    const unit = matched[2] || 'h';[m
+[32m+[m[32m    if (!Number.isFinite(count) || count < 0) return null;[m
+[32m+[m[32m    switch (unit) {[m
+[32m+[m[32m        case 'ms': return count;[m
+[32m+[m[32m        case 's': return count * 1000;[m
+[32m+[m[32m        case 'm': return count * 60 * 1000;[m
+[32m+[m[32m        case 'h': return count * 60 * 60 * 1000;[m
+[32m+[m[32m        case 'd': return count * 24 * 60 * 60 * 1000;[m
+[32m+[m[32m        default: return null;[m
+[32m+[m[32m    }[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32mfunction setupNetworkListAutoCheck() {[m
+[32m+[m[32m    if (networkListAutoCheckTimer) {[m
+[32m+[m[32m        clearInterval(networkListAutoCheckTimer);[m
+[32m+[m[32m        networkListAutoCheckTimer = null;[m
+[32m+[m[32m    }[m
+[32m+[m[32m    if (!settings.autoUpdateNetworkList) {[m
+[32m+[m[32m        return;[m
+[32m+[m[32m    }[m
+[32m+[m[32m    const intervalMs = parseNetworkListAutoCheckInterval(settings.networkListAutoCheckInterval);[m
+[32m+[m[32m    if (intervalMs === null || intervalMs <= 0) {[m
+[32m+[m[32m        return;[m
+[32m+[m[32m    }[m
+[32m+[m[32m    networkListAutoCheckTimer = setInterval(() => {[m
+[32m+[m[32m        checkNetworkListUpdates().catch(err => console.error('[AutoCheck] 网络歌单检测失败:', err));[m
+[32m+[m[32m    }, intervalMs);[m
+[32m+[m[32m    console.log('[AutoCheck] 已设置网络歌单自动检测间隔：', settings.networkListAutoCheckInterval, '(', intervalMs, 'ms )');[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32masync function checkNetworkListUpdates(manual = false) {[m
+[32m+[m[32m    if (!currentListData || !Array.isArray(currentListData.userList) || currentListData.userList.length === 0) {[m
+[32m+[m[32m        if (manual && window.showToast) showToast('info', '当前没有可检查的网络歌单', 3000);[m
+[32m+[m[32m        return;[m
+[32m+[m[32m    }[m
+[32m+[m
+[32m+[m[32m    const targetLists = currentListData.userList.filter(l => l && l.sourceListId && l.source);[m
+[32m+[m[32m    if (targetLists.length === 0) {[m
+[32m+[m[32m        if (manual && window.showToast) showToast('info', '当前没有可检查的网络歌单', 3000);[m
+[32m+[m[32m        return;[m
+[32m+[m[32m    }[m
+[32m+[m
+[32m+[m[32m    const changedLists = [];[m
+[32m+[m[32m    const failedLists = [];[m
+[32m+[m
+[32m+[m[32m    for (const list of targetLists) {[m
+[32m+[m[32m        try {[m
+[32m+[m[32m            const url = `${API_BASE}/songList/detail?source=${list.source}&id=${encodeURIComponent(list.sourceListId)}&page=1`;[m
+[32m+[m[32m            const res = await fetch(url);[m
+[32m+[m[32m            const data = await res.json();[m
+[32m+[m[32m            if (!data || !Array.isArray(data.list)) {[m
+[32m+[m[32m                throw new Error('远端歌单数据不完整');[m
+[32m+[m[32m            }[m
+[32m+[m
+[32m+[m[32m            const remoteList = data.list.map(item => {[m
+[32m+[m[32m                const formatted = formatSongToLxMusicStandard(item);[m
+[32m+[m[32m                if (!formatted.source) formatted.source = list.source;[m
+[32m+[m[32m                return formatted;[m
+[32m+[m[32m            });[m
+[32m+[m
+[32m+[m[32m            const localList = Array.isArray(list.list) ? list.list : [];[m
+[32m+[m[32m            const sameLength = localList.length === remoteList.length;[m
+[32m+[m[32m            const sameIds = sameLength && localList.every((item, index) => item && remoteList[index] && String(item.id || '') === String(remoteList[index].id || '') && String(item.source || '') === String(remoteList[index].source || ''));[m
+[32m+[m[32m            if (!sameIds) {[m
+[32m+[m[32m                window.networkListUpdateMap.add(list.id);[m
+[32m+[m[32m                changedLists.push(list.name || list.id || list.sourceListId);[m
+[32m+[m[32m            } else {[m
+[32m+[m[32m                window.networkListUpdateMap.delete(list.id);[m
+[32m+[m[32m            }[m
+[32m+[m[32m        } catch (err) {[m
+[32m+[m[32m            console.error('[CheckNetworkListUpdates] 检查失败:', list.name || list.id || list.sourceListId, err);[m
+[32m+[m[32m            failedLists.push(list.name || list.id || list.sourceListId);[m
+[32m+[m[32m        }[m
+[32m+[m[32m    }[m
+[32m+[m
+[32m+[m[32m    if (typeof renderMyLists === 'function') {[m
+[32m+[m[32m        renderMyLists(currentListData);[m
+[32m+[m[32m    }[m
+[32m+[m
+[32m+[m[32m    if (manual) {[m
+[32m+[m[32m        if (changedLists.length > 0) {[m
+[32m+[m[32m            showSuccess(`检测到 ${changedLists.length} 个歌单已更新：${changedLists.join('、')}`);[m
+[32m+[m[32m        } else {[m
+[32m+[m[32m            showSuccess('所有网络歌单均为最新状态');[m
+[32m+[m[32m        }[m
+[32m+[m[32m        if (failedLists.length > 0) {[m
+[32m+[m[32m            showError(`部分歌单检测失败：${failedLists.join('、')}`);[m
+[32m+[m[32m        }[m
+[32m+[m[32m    } else if (changedLists.length > 0 && window.showToast) {[m
+[32m+[m[32m        showToast('info', `检测到 ${changedLists.length} 个网络歌单有更新`, 5000);[m
+[32m+[m[32m    }[m
+[32m+[m[32m}[m
+[32m+[m
+[32m+[m[32mwindow.checkNetworkListUpdates = checkNetworkListUpdates;[m
+ [m
+ [m
+ [m
+[36m@@ -4934,6 +5039,7 @@[m [mfunction loadSettings() {[m
+ [m
+     // 同步 UI 状态[m
+     syncSettingsUI();[m
+[32m+[m[32m    setupNetworkListAutoCheck();[m
+ }[m
+ [m
+ // ========== 键盘快捷键逻辑 ==========[m
+[36m@@ -5092,6 +5198,13 @@[m [masync function updateSetting(key, value) {[m
+     }[m
+     // 实时同步 UI 并应用效果[m
+     syncSettingsUI(key, value);[m
+[32m+[m[32m    if (key === 'networkListAutoCheckInterval' || key === 'autoUpdateNetworkList') {[m
+[32m+[m[32m        const intervalMs = parseNetworkListAutoCheckInterval(settings.networkListAutoCheckInterval);[m
+[32m+[m[32m        if (key === 'networkListAutoCheckInterval' && intervalMs === null) {[m
+[32m+[m[32m            showError('无效的自动检测间隔，请使用 30m / 6h / 1d 等格式');[m
+[32m+[m[32m        }[m
+[32m+[m[32m        setupNetworkListAutoCheck();[m
+[32m+[m[32m    }[m
+ [m
+     // [New] Push to server if enabled[m
+     if (settings.saveAccountSettingsToFile) {[m
+[36m@@ -5256,6 +5369,7 @@[m [mconst SETTINGS_UI_MAP = {[m
+ [m
+     // 系统 & 网络 (System & Network)[m
+     autoUpdateNetworkList: { id: 'setting-auto-update-list', type: 'checkbox' },[m
+[32m+[m[32m    networkListAutoCheckInterval: { id: 'setting-network-list-auto-check-interval', type: 'value' },[m
+     saveAccountSettingsToFile: { id: 'setting-save-settings-to-file', type: 'checkbox' },[m
+     enableLyricCache: { id: 'setting-enable-lyric-cache', type: 'checkbox' },[m
+     enableSongUrlCache: { id: 'setting-enable-url-cache', type: 'checkbox' },[m
+[36m@@ -8188,6 +8302,9 @@[m [mfunction renderMyLists(data) {[m
+         const showExternalOps = listObj && listObj.sourceListId && listObj.source;[m
+         let opsHtml = '';[m
+         if (showExternalOps) {[m
+[32m+[m[32m            const updateBadge = window.networkListUpdateMap && window.networkListUpdateMap.has(id)[m
+[32m+[m[32m                ? `<span class="inline-flex items-center justify-center w-4 h-4 rounded-full bg-rose-500 text-white text-[10px] font-bold mr-2" title="歌单有更新">!</span>`[m
+[32m+[m[32m                : '';[m
+             opsHtml = `[m
+                 <i class="fas fa-sync-alt refresh-btn text-gray-400 hover:text-emerald-500 hidden group-hover:block flex-shrink-0 text-[10px] mr-2 transition-all active:rotate-180" [m
+                    title="更新歌单内容" [m
+[36m@@ -8195,6 +8312,7 @@[m [mfunction renderMyLists(data) {[m
+                 <i class="fas fa-external-link-alt jump-btn text-gray-400 hover:text-emerald-500 hidden group-hover:block flex-shrink-0 text-[10px] mr-2 transition-all" [m
+                    title="打开原始歌单" [m
+                    onclick="event.stopPropagation(); handleJumpToOriginalList('${id}', event)"></i>[m
+[32m+[m[32m                ${updateBadge}[m
+             `;[m
+         }[m
+ [m
+[36m@@ -8666,6 +8784,11 @@[m [masync function handleRefreshList(listId, event, silent = false) {[m
+             if (data.info.img || data.info.pic) list.Album = data.info.img || data.info.pic;[m
+         }[m
+ [m
+[32m+[m[32m        // 清除该列表的更新标记[m
+[32m+[m[32m        if (window.networkListUpdateMap) {[m
+[32m+[m[32m            window.networkListUpdateMap.delete(listId);[m
+[32m+[m[32m        }[m
+[32m+[m
+         // 推送同步并重绘 UI[m
+         await pushDataChange();[m
+         renderMyLists(currentListData);[m
+[1mdiff --git a/public/music/index.html b/public/music/index.html[m
+[1mindex c926125..573cc6f 100644[m
+[1m--- a/public/music/index.html[m
+[1m+++ b/public/music/index.html[m
+[36m@@ -1689,6 +1689,26 @@[m
+                                         </label>[m
+                                     </div>[m
+ [m
+[32m+[m[32m                                    <div class="grid grid-cols-1 gap-3 md:grid-cols-[1fr_auto] md:items-center">[m
+[32m+[m[32m                                        <div>[m
+[32m+[m[32m                                            <div class="text-sm font-bold t-text-main">网络歌单自动检测间隔</div>[m
+[32m+[m[32m                                            <div class="text-xs t-text-muted mt-1">输入值示例：30m / 6h / 1d，开启后自动检测并标记已更新歌单。</div>[m
+[32m+[m[32m                                        </div>[m
+[32m+[m[32m                                        <input id="setting-network-list-auto-check-interval" type="text"[m
+[32m+[m[32m                                            class="w-full md:w-40 rounded-xl border t-border-main px-3 py-2 text-sm bg-transparent focus:outline-none focus:ring-2 focus:ring-emerald-500"[m
+[32m+[m[32m                                            onchange="updateSetting('networkListAutoCheckInterval', this.value)">[m
+[32m+[m[32m                                    </div>[m
+[32m+[m[32m                                    <div class="flex items-center justify-between">[m
+[32m+[m[32m                                        <div>[m
+[32m+[m[32m                                            <div class="text-sm font-bold t-text-main">检查所有歌单更新</div>[m
+[32m+[m[32m                                            <div class="text-xs t-text-muted mt-1">手动触发一次网络歌单更新检测，结果会在侧边栏中显示。</div>[m
+[32m+[m[32m                                        </div>[m
+[32m+[m[32m                                        <button type="button" onclick="checkNetworkListUpdates(true)"[m
+[32m+[m[32m                                            class="px-4 py-2 rounded-xl bg-emerald-500 text-white text-sm font-medium hover:bg-emerald-600 transition-all">[m
+[32m+[m[32m                                            立即检查[m
+[32m+[m[32m                                        </button>[m
+[32m+[m[32m                                    </div>[m
+[32m+[m
+                                     <!-- [Renamed] Save Settings to Server Toggle -->[m
+                                     <div class="flex items-center justify-between">[m
+                                         <div>[m
