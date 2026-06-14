@@ -378,6 +378,8 @@ window.LocalMusicManager = {
             };
 
             if (!matchKeywords(k)) return false;
+            if (qk && !matchKeywords(qk)) return false;
+
             // SubPath check
             if (this.selectedSubPath !== '') {
                 const target = this.selectedSubPath === '__ROOT__' ? '' : this.selectedSubPath;
@@ -443,7 +445,7 @@ window.LocalMusicManager = {
 
         // 4. Update UI Indicator
         const dot = document.getElementById('lm-filter-active-dot');
-        const hasActiveFilters = this.searchKeyword || this.filterQuality.size > 0 || this.filterFolder !== 'all' || this.filterStatus.size > 0 || this.filterSource.size > 0;
+        const hasActiveFilters = this.searchKeyword || this.quickSearchKeyword || this.filterQuality.size > 0 || this.filterFolder !== 'all' || this.filterStatus.size > 0 || this.filterSource.size > 0;
         if (dot) {
             if (hasActiveFilters) dot.classList.remove('hidden');
             else dot.classList.add('hidden');
