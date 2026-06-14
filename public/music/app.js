@@ -74,7 +74,7 @@ const DEFAULT_SETTINGS = {
     enableCustomProxy: false, // 是否启用自定义代理
     customProxyUrl: '', // 自定义代理URL模板，使用 {url} 作为原始URL占位符
     enableOnlyDownloadMode: false, // 仅下载模式
-    downloadConcurrency: 3, // 缓存并发量 (1-6)
+    downloadConcurrency: 3, // 缓存并发量 (1-5)
     hotSearchLimit: 20, // 热搜显示数量
     lyricFontSize: 1.25, // 歌词字体大小 (rem)
     lyricFontFamily: '', // 词字体
@@ -5156,9 +5156,10 @@ const SETTINGS_UI_MAP = {
     downloadConcurrency: {
         id: 'setting-download-concurrency',
         type: 'value',
+        normalize: (v) => Math.min(5, Math.max(1, parseInt(v, 10) || DEFAULT_SETTINGS.downloadConcurrency)),
         action: (v) => {
             if (window.SystemDownloadManager) {
-                window.SystemDownloadManager.updateMaxConcurrent(parseInt(v));
+                window.SystemDownloadManager.updateMaxConcurrent(v);
             }
         }
     },
@@ -5309,6 +5310,7 @@ function syncSettingsUI(key = null, value = null) {
         const config = SETTINGS_UI_MAP[itemKey];
         if (!config) return;
 
+        if (config.normalize) itemValue = config.normalize(itemValue);
         const el = document.getElementById(config.id);
         if (el) {
             if (config.type === 'checkbox') el.checked = !!itemValue;
@@ -12308,5 +12310,4 @@ document.addEventListener('click', (e) => {
 document.addEventListener('DOMContentLoaded', () => {
     window.CustomSelectManager.initAll();
 });
-
 

@@ -6,7 +6,7 @@
 class DownloadManager {
     constructor() {
         this.tasks = []; // Queue of tasks
-        this.maxConcurrent = window.settings?.downloadConcurrency || 3;
+        this.maxConcurrent = this.normalizeConcurrency(window.settings?.downloadConcurrency);
         this.activeCount = 0; // Currently active (local downloading + triggered server tasks)
 
         // UI Elements
@@ -29,9 +29,15 @@ class DownloadManager {
 
     // Update max concurrency limit dynamically
     updateMaxConcurrent(value) {
-        console.log('[DownloadManager] Concurrency limit updated to:', value);
-        this.maxConcurrent = value;
+        this.maxConcurrent = this.normalizeConcurrency(value);
+        console.log('[DownloadManager] Concurrency limit updated to:', this.maxConcurrent);
         this.processQueue();
+    }
+
+    normalizeConcurrency(value) {
+        const parsed = parseInt(value, 10);
+        if (!Number.isFinite(parsed)) return 3;
+        return Math.min(5, Math.max(1, parsed));
     }
 
     async pollServerProgress() {

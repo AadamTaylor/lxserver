@@ -1802,7 +1802,7 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
             // [核心逻辑] 如果是受限的公开用户，仅允许保存特定的 3 项设置
             if (resolvedUsername === '_open' && global.lx.config['user.enablePublicRestriction']) {
               const restrictedSettings: any = {}
-              const allowedKeys = ['enableServerCache', 'enableServerLyricCache', 'serverCacheLocation']
+              const allowedKeys = ['enableServerCache', 'enableServerLyricCache', 'serverCacheLocation', 'downloadConcurrency']
               allowedKeys.forEach(key => {
                 if (settings[key] !== undefined) restrictedSettings[key] = settings[key]
               })
