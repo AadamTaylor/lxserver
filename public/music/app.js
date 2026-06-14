@@ -3467,13 +3467,24 @@ async function triggerServerCache(song, url, quality) {
         const adminPass = localStorage.getItem('lx_admin_password');
         if (adminPass) headers['x-frontend-auth'] = adminPass;
 
+        const coverUrl = typeof getImgUrl === 'function' ? getImgUrl(song) : (song.img || song.meta?.picUrl || '');
+        const songInfoForCache = {
+            ...song,
+            img: song.img || coverUrl,
+            meta: {
+                ...(song.meta || {}),
+                picUrl: song.meta?.picUrl || coverUrl
+            }
+        };
+
         await fetch('/api/music/cache/download', {
             method: 'POST',
             headers: headers,
             body: JSON.stringify({ 
-                songInfo: song, 
+                songInfo: songInfoForCache,
                 url, 
                 quality,
+                namingPattern: window.settings?.serverCacheNamingPattern || 'simple',
                 embedLyric: !!(window.settings?.embedLyricToFile ?? true)
             })
         });

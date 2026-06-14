@@ -2329,11 +2329,15 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
       if (pathname === '/api/music/cache/download' && req.method === 'POST') {
         void readBody(req).then(body => {
           try {
-            const { songInfo, url, quality, enableOnlyDownloadMode, cacheLyric, embedLyric } = JSON.parse(body)
+            const { songInfo, url, quality, enableOnlyDownloadMode, namingPattern, cacheLyric, embedLyric } = JSON.parse(body)
             if (!songInfo || !url) {
               res.writeHead(400)
               res.end('Missing params')
               return
+            }
+            if (namingPattern) {
+              fileCache.setNamingPattern(namingPattern)
+              if (global.lx.config) global.lx.config['cache.namingPattern'] = namingPattern
             }
 
             // Fire and forget (background download) with Abort support

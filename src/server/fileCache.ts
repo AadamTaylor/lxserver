@@ -1186,8 +1186,26 @@ export const saveLyricCache = (songInfo: any, lyricsObj: any, username?: string,
         let quality = songInfo.quality || 'unknown'
         let dir: string
 
-        // First check where the audio file actually exists
-        const audioResult = checkCache({ ...songInfo, exactQuality: false }, username, false)
+        const normalizedUsername = (username && username !== '_open' && username !== 'default') ? username : '_open'
+        const id = normalizeSongId(songInfo)
+        const preferredFolders: Array<'cache' | 'music'> = isOnlyDownload ? ['music', 'cache'] : ['cache', 'music']
+        let audioResult: any = { exists: false }
+        for (const folder of preferredFolders) {
+            const cached = indexManager.get(normalizedUsername, id, folder, songInfo.quality, false)
+            if (!cached?.filename) continue
+            const root = getCacheDir(normalizedUsername, folder === 'music')
+            const filePath = path.join(root, cached.filename)
+            if (fs.existsSync(filePath)) {
+                audioResult = {
+                    exists: true,
+                    path: filePath,
+                    quality: cached.quality,
+                    folder,
+                    filename: cached.filename
+                }
+                break
+            }
+        }
 
         if (audioResult.exists && audioResult.path) {
             // If audio exists, save lyric in the same folder
@@ -1217,10 +1235,7 @@ export const saveLyricCache = (songInfo: any, lyricsObj: any, username?: string,
         console.log(`[FileCache] Lyric cached saved to: ${finalPath}`)
 
         // Update index — use normalizeSongId to ensure the ID has source prefix, matching index keys
-        const id = normalizeSongId(songInfo)
-        const normalizedUsername = (username && username !== '_open' && username !== 'default') ? username : '_open'
-        // Update both cache and music folders in case the audio was found in either
-        const foldersToUpdate: Array<'cache' | 'music'> = ['cache', 'music']
+        const foldersToUpdate: Array<'cache' | 'music'> = isOnlyDownload ? ['music', 'cache'] : ['cache', 'music']
         for (const folder of foldersToUpdate) {
             const existing = indexManager.get(normalizedUsername, id, folder, quality)
             if (existing) {
@@ -1267,13 +1282,36 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
             const id = metadata.id || String(songInfo.id || songInfo.songmid)
             const normalizedUsername = (username && username !== '_open' && username !== 'default') ? username : '_open'
             const stat = fs.statSync(finalPath)
+            let hasCover = false
+            let hasEmbedLyric = false
+            try {
+                const tagger = new MusicTagger()
+                tagger.loadPath(finalPath)
+                hasCover = !!(tagger.pictures && tagger.pictures.length > 0)
+                const lyricsInTag = tagger.lyrics
+                hasEmbedLyric = !!(lyricsInTag && lyricsInTag.trim().length > 10)
+                tagger.dispose()
+            } catch (e) { }
+
+            let lyricFilename: string | undefined
+            const sourceLyricPath = result.path.substring(0, result.path.length - ext.length) + '.lrc'
+            if (fs.existsSync(sourceLyricPath)) {
+                const targetLyricPath = path.join(dir, baseName + '.lrc')
+                fs.copyFileSync(sourceLyricPath, targetLyricPath)
+                lyricFilename = path.basename(targetLyricPath)
+            }
+
             indexManager.update(normalizedUsername, {
                 id, songmid: id, name: metadata.name, singer: metadata.singer,
                 album: metadata.album, albumId: metadata.albumId, img: metadata.img,
                 interval: metadata.interval, source: metadata.source,
                 quality: quality || result.quality || 'unknown', filename: path.basename(finalPath),
                 folder: 'music', mtime: Date.now(), size: stat.size,
-                ext: ext.replace('.', ''), hasCover: false, hasLyric: false
+                lyricFilename,
+                ext: ext.replace('.', ''),
+                hasCover,
+                hasLyric: !!lyricFilename,
+                hasEmbedLyric
             }, 'music')
 
             console.log(`[FileCache] Copied cached song to music folder: ${path.basename(finalPath)}`)

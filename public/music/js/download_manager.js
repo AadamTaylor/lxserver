@@ -305,6 +305,19 @@ class DownloadManager {
             '/music/assets/logo.svg';
     }
 
+    getSongInfoForServer(song) {
+        const cover = this.getSongCover(song);
+        const normalizedCover = cover && cover !== '/music/assets/logo.svg' ? cover : '';
+        return {
+            ...song,
+            img: song.img || normalizedCover,
+            meta: {
+                ...(song.meta || {}),
+                picUrl: song.meta?.picUrl || normalizedCover
+            }
+        };
+    }
+
     // [Unified] Status generator for drawer lists
     getStatusHtml(icon, text, isSpin = false) {
         return `
@@ -441,10 +454,11 @@ class DownloadManager {
                 method: 'POST',
                 headers,
                 body: JSON.stringify({ 
-                    songInfo: resolvedSong,
+                    songInfo: this.getSongInfoForServer(resolvedSong),
                     url: rawUrl, 
                     quality, 
                     enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false,
+                    namingPattern: window.settings?.serverCacheNamingPattern || 'simple',
                     cacheLyric: window.settings?.enableServerLyricCache !== false,
                     embedLyric: !!(window.settings?.embedLyricToFile ?? true)
                 })
@@ -757,7 +771,7 @@ class DownloadManager {
                     const res = await fetch('/api/music/cache/download', {
                         method: 'POST',
                         headers,
-                        body: JSON.stringify({ songInfo: resolvedSong, url: rawUrl, quality, enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false, cacheLyric: window.settings?.enableServerLyricCache !== false, embedLyric: !!(window.settings?.embedLyricToFile ?? true) })
+                        body: JSON.stringify({ songInfo: this.getSongInfoForServer(resolvedSong), url: rawUrl, quality, enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false, namingPattern: window.settings?.serverCacheNamingPattern || 'simple', cacheLyric: window.settings?.enableServerLyricCache !== false, embedLyric: !!(window.settings?.embedLyricToFile ?? true) })
                     });
                     if (!res.ok) throw new Error('服务器拒绝请求');
 
@@ -862,7 +876,7 @@ class DownloadManager {
                         const res = await fetch('/api/music/cache/download', {
                             method: 'POST',
                             headers,
-                            body: JSON.stringify({ songInfo: resolvedSong, url: rawUrl, quality, enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false, cacheLyric: window.settings?.enableServerLyricCache !== false, embedLyric: !!(window.settings?.embedLyricToFile ?? true) })
+                            body: JSON.stringify({ songInfo: this.getSongInfoForServer(resolvedSong), url: rawUrl, quality, enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false, namingPattern: window.settings?.serverCacheNamingPattern || 'simple', cacheLyric: window.settings?.enableServerLyricCache !== false, embedLyric: !!(window.settings?.embedLyricToFile ?? true) })
                         });
                         if (!res.ok) throw new Error('服务器拒绝缓存');
 
