@@ -118,6 +118,17 @@ class DownloadManager {
                         task.lastPolledBytes = progressInfo.received || 0;
                         task.lastPolledTime = Date.now();
 
+                        if (progressInfo.status === 'error') {
+                            task.status = 'error';
+                            task.progress = progressInfo.progress || 0;
+                            task.errorMsg = progressInfo.errorMsg || '服务器下载失败';
+                            task.speed = 0;
+                            this.renderTask(task);
+                            this.saveTasks();
+                            this.processQueue();
+                            return;
+                        }
+
                         task.status = (progressInfo.status === 'finished' || progressInfo.status === 'exists') ? progressInfo.status : 'downloading';
                         task.progress = progressInfo.progress || 0;
                         task.downloadedBytes = progressInfo.received || 0;

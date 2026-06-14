@@ -36,7 +36,7 @@ let currentCacheLocation = CACHE_ROOTS.ROOT
 
 // Helper to get actual directory path
 // [Unified Enhancement] Cache Progress Tracker
-export const cacheProgress: Map<string, { progress: number; status: string; total?: number; received?: number }> = new Map()
+export const cacheProgress: Map<string, { progress: number; status: string; total?: number; received?: number; errorMsg?: string }> = new Map()
 
 // [New] Active Cache Tasks Tracker: username -> [ { songKey, controller } ]
 export const activeTasks: Map<string, Array<{ songKey: string, controller: AbortController }>> = new Map()
@@ -1262,6 +1262,12 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
         let req: http.ClientRequest
         let settled = false
 
+        const fail = (err: Error) => {
+            const message = err.message || 'Download failed'
+            cacheProgress.set(songKey, { progress: 0, status: 'error', errorMsg: message })
+            settle(() => reject(err))
+        }
+
         const settle = (fn: () => void) => {
             if (settled) return
             settled = true
@@ -1281,8 +1287,7 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
         req = protocol.get(url, (res) => {
             if (res.statusCode !== 200) {
                 fs.unlink(tempPath, () => { })
-                cacheProgress.set(songKey, { progress: 0, status: 'error' })
-                settle(() => reject(new Error(`Status: ${res.statusCode}`)))
+                fail(new Error(`Status: ${res.statusCode}`))
                 return
             }
 
@@ -1323,7 +1328,7 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
                 fs.rename(tempPath, finalPath, async (err) => {
                     if (err) {
                         fs.unlink(tempPath, () => { })
-                        settle(() => reject(err))
+                        fail(err)
                         return
                     }
 
@@ -1398,9 +1403,9 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
                     settle(() => { resolve(); void checkAndCleanupCache(username) })
                 })
             })
-            fileStream.on('error', (err) => { fs.unlink(tempPath, () => { }); settle(() => reject(err)) })
+            fileStream.on('error', (err) => { fs.unlink(tempPath, () => { }); fail(err) })
         })
-        req.on('error', (err) => { fs.unlink(tempPath, () => { }); settle(() => reject(err)) })
+        req.on('error', (err) => { fs.unlink(tempPath, () => { }); fail(err) })
     })
 }
 

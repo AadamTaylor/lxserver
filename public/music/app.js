@@ -2820,6 +2820,8 @@ async function resolveSongUrl(song, quality, isSilent = false, isRetry = false, 
             }
         }
 
+        const fallbackRetryMode = isRetry === 'local_retry' ? 'local_retry' : true;
+
         for (const step of steps) {
             if (step === 'degrade') {
                 const nextQuality = isPlatformNotSupported ? null : window.QualityManager.getNextLowerQuality(quality, song);
@@ -2829,7 +2831,7 @@ async function resolveSongUrl(song, quality, isSilent = false, isRetry = false, 
                         const toName = window.QualityManager.getQualityDisplayName(nextQuality);
                         showInfo(`从 ${fromName} 降级到 ${toName} 播放...`);
                     }
-                    return await resolveSongUrl(song, nextQuality, isSilent, true, false);
+                    return await resolveSongUrl(song, nextQuality, isSilent, fallbackRetryMode, false);
                 }
             } else if (step === 'switch_platform') {
                 if (!isSilent) {
@@ -2841,7 +2843,7 @@ async function resolveSongUrl(song, quality, isSilent = false, isRetry = false, 
                         showInfo(`找到备选源，尝试从 ${getSourceName(matchedSong.source)} 播放...`);
                     }
                     const bestNextQuality = window.QualityManager.getBestQuality(matchedSong, settings.preferredQuality || '320k');
-                    const matchedResult = await fetchSongUrl(matchedSong, bestNextQuality, true, isSilent);
+                    const matchedResult = await fetchSongUrl(matchedSong, bestNextQuality, fallbackRetryMode, isSilent);
                     return {
                         ...matchedResult,
                         songInfo: matchedSong,
@@ -3055,7 +3057,7 @@ async function fetchSongUrl(song, quality, isRetry = false, isSilent = false) {
         }
     }
 
-    const allowLinkCache = (!isRetry || isRetry === 'local_retry') && settings.enableSongUrlCache !== false;
+    const allowLinkCache = !isRetry && settings.enableSongUrlCache !== false;
     if (allowLinkCache) {
         let cachedUrl = localStorage.getItem(cacheKey);
         if (cachedUrl) {
