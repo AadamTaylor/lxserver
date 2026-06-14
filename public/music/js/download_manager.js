@@ -887,7 +887,7 @@ class DownloadManager {
     }
 
     clearCompleted() {
-        this.tasks = this.tasks.filter(t => t.status !== 'finished');
+        this.tasks = this.tasks.filter(t => t.status !== 'finished' && t.status !== 'exists');
         this.renderList();
         this.saveTasks();
     }
@@ -895,8 +895,11 @@ class DownloadManager {
     clearAll() {
         // 先弹确认框
         if (typeof showSelect === 'function') {
-            showSelect('停止并清空任务', '确认要立即停止所有进行中的任务并清空列表吗？', {
-                confirmText: '确认停止',
+            const hasActiveTasks = this.tasks.some(t => t.status === 'downloading' || t.status === 'waiting');
+            const title = hasActiveTasks ? '停止并清空任务' : '清空任务列表';
+            const message = hasActiveTasks ? '确认要立即停止所有进行中的任务并清空列表吗？' : '确认要清空所有下载任务记录吗？';
+            showSelect(title, message, {
+                confirmText: hasActiveTasks ? '确认停止' : '确认清空',
                 danger: true
             }).then(confirmed => {
                 if (!confirmed) return;
@@ -945,7 +948,7 @@ class DownloadManager {
                 isServer: t.isServer,
                 quality: t.quality,
                 status: t.status === 'downloading' ? (t.isServer ? 'waiting' : 'waiting') : t.status,
-                progress: t.status === 'finished' ? 100 : (t.isServer ? t.progress : 0),
+                progress: (t.status === 'finished' || t.status === 'exists') ? 100 : (t.isServer ? t.progress : 0),
                 errorMsg: t.errorMsg || '',
                 retryCount: t.retryCount || 0,
                 maxRetries: t.maxRetries || 2
@@ -1005,7 +1008,7 @@ class DownloadManager {
                 active++;
             }
             // 所有任务都纳入进度计算（server 任务可能 totalBytes=0，但 progress/status 是已知的）
-            if (t.status === 'finished') {
+            if (t.status === 'finished' || t.status === 'exists') {
                 pctTotal += 100;
                 pctCount++;
             } else if (t.status === 'downloading' || t.status === 'waiting') {

@@ -1247,8 +1247,42 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
 
     const result = checkCache({ ...songInfo, quality, exactQuality: true }, username, false)
     if (result.exists && !result.isCollision) {
-        console.log(`[FileCache] Song already exists, skipping download: ${result.filename}`)
-        // 通知前端轮询：文件已存在，视为立即完成
+        const targetFolder: 'cache' | 'music' = isOnlyDownload ? 'music' : 'cache'
+        if (result.folder === targetFolder) {
+            console.log(`[FileCache] Song already exists in ${targetFolder}, skipping download: ${result.filename}`)
+            // 通知前端轮询：目标目录文件已存在，视为立即完成
+            cacheProgress.set(songKey, { progress: 100, status: 'exists' })
+            setTimeout(() => cacheProgress.delete(songKey), 30000)
+            return Promise.resolve()
+        }
+
+        if (isOnlyDownload && result.folder === 'cache' && result.path) {
+            const ext = path.extname(result.filename || result.path) || '.mp3'
+            const finalPath = path.join(dir, baseName + ext)
+            if (!fs.existsSync(finalPath)) {
+                fs.copyFileSync(result.path, finalPath)
+            }
+
+            const metadata = extractSongMetadata(songInfo)
+            const id = metadata.id || String(songInfo.id || songInfo.songmid)
+            const normalizedUsername = (username && username !== '_open' && username !== 'default') ? username : '_open'
+            const stat = fs.statSync(finalPath)
+            indexManager.update(normalizedUsername, {
+                id, songmid: id, name: metadata.name, singer: metadata.singer,
+                album: metadata.album, albumId: metadata.albumId, img: metadata.img,
+                interval: metadata.interval, source: metadata.source,
+                quality: quality || result.quality || 'unknown', filename: path.basename(finalPath),
+                folder: 'music', mtime: Date.now(), size: stat.size,
+                ext: ext.replace('.', ''), hasCover: false, hasLyric: false
+            }, 'music')
+
+            console.log(`[FileCache] Copied cached song to music folder: ${path.basename(finalPath)}`)
+            cacheProgress.set(songKey, { progress: 100, status: 'finished', total: stat.size, received: stat.size })
+            setTimeout(() => cacheProgress.delete(songKey), 30000)
+            return Promise.resolve()
+        }
+
+        console.log(`[FileCache] Song already exists in ${result.folder}, skipping download: ${result.filename}`)
         cacheProgress.set(songKey, { progress: 100, status: 'exists' })
         setTimeout(() => cacheProgress.delete(songKey), 30000)
         return Promise.resolve()
