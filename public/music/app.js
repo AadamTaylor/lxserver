@@ -2832,7 +2832,7 @@ async function resolveSongUrl(song, quality, isSilent = false, isRetry = false, 
             }
         }
 
-        const fallbackRetryMode = isRetry === 'local_retry' ? 'local_retry' : true;
+        const fallbackRetryMode = (isRetry === 'local_retry' || isRetry === 'download') ? isRetry : true;
 
         for (const step of steps) {
             if (step === 'degrade') {
@@ -2870,12 +2870,124 @@ async function resolveSongUrl(song, quality, isSilent = false, isRetry = false, 
     }
 }
 
+async function resolveDownloadSongUrl(song, quality, isSilent = true) {
+    const tried = new Set();
+    let lastError = null;
+
+    const tryResolveCandidate = async (candidateSong, preferredQuality) => {
+        let candidateQuality = window.QualityManager
+            ? window.QualityManager.getBestQuality(candidateSong, preferredQuality || settings.preferredQuality || '320k')
+            : (preferredQuality || '320k');
+
+        while (candidateQuality) {
+            const key = `${candidateSong.source || ''}_${candidateSong.id || candidateSong.songmid || ''}_${candidateQuality}`;
+            if (tried.has(key)) break;
+            tried.add(key);
+
+            try {
+                const result = await fetchSongUrl(candidateSong, candidateQuality, 'download', isSilent);
+                if (result.errorMsg) throw new Error(result.errorMsg);
+                return result;
+            } catch (err) {
+                lastError = err;
+                console.warn(`[DownloadResolve] 解析失败: ${candidateSong.name} via ${candidateSong.source} (${candidateQuality})`, err);
+                if (!window.QualityManager || settings.enableAutoDegradeQuality === false) break;
+                candidateQuality = window.QualityManager.getNextLowerQuality(candidateQuality, candidateSong);
+            }
+        }
+
+        return null;
+    };
+
+    const originalResult = await tryResolveCandidate(song, quality);
+    if (originalResult) return originalResult;
+
+    if (settings.enableAutoSwitchSource === false) {
+        throw lastError || new Error('解析失败');
+    }
+
+    const matches = await findOtherSourceMatches(song, isSilent, { ignoreSupportedFilter: true });
+    for (const matchedSong of matches) {
+        const matchedResult = await tryResolveCandidate(matchedSong, quality);
+        if (matchedResult) {
+            return {
+                ...matchedResult,
+                songInfo: matchedSong,
+                switchedSource: true,
+                originalSource: song.source
+            };
+        }
+    }
+
+    throw lastError || new Error('未找到可下载的备选源');
+}
+
+function normalizeSongMatchText(value) {
+    return String(value || '')
+        .toLowerCase()
+        .replace(/[（(].*?[）)]/g, '')
+        .replace(/[\s·・,，.。!！?？:：;；'"‘’“”《》<>【】[\]()（）\-_/\\]/g, '');
+}
+
+function isSingerMatch(sourceSinger, targetSinger) {
+    const sourceText = normalizeSongMatchText(sourceSinger);
+    const targetText = normalizeSongMatchText(targetSinger);
+    if (!sourceText || !targetText) return true;
+    if (sourceText.includes(targetText) || targetText.includes(sourceText)) return true;
+
+    const splitSinger = value => String(value || '')
+        .toLowerCase()
+        .split(/[、,，/&／|;；]+/)
+        .map(normalizeSongMatchText)
+        .filter(Boolean);
+    const sourceParts = splitSinger(sourceSinger);
+    const targetParts = splitSinger(targetSinger);
+    return sourceParts.some(sourcePart => targetParts.some(targetPart => sourcePart.includes(targetPart) || targetPart.includes(sourcePart)));
+}
+
+function getSongMatchScore(item, song) {
+    const targetName = normalizeSongMatchText(song.name);
+    const itemName = normalizeSongMatchText(item.name);
+    if (!targetName || !itemName) return -1;
+    if (!itemName.includes(targetName) && !targetName.includes(itemName)) return -1;
+
+    if (!isSingerMatch(item.singer, song.singer)) return -1;
+
+    const targetDuration = timeToSeconds(song.interval);
+    const itemDuration = timeToSeconds(item.interval);
+    let durationScore = 0;
+    if (targetDuration > 0 && itemDuration > 0) {
+        const durationDiff = Math.abs(targetDuration - itemDuration);
+        if (durationDiff > 8) return -1;
+        durationScore = 8 - durationDiff;
+    }
+
+    let nameScore = 0;
+    if (itemName === targetName) nameScore = 20;
+    else if (itemName.includes(targetName) || targetName.includes(itemName)) nameScore = 10;
+
+    const sameAlbum = item.albumName && song.albumName && normalizeSongMatchText(item.albumName) === normalizeSongMatchText(song.albumName);
+    return nameScore + durationScore + (sameAlbum ? 3 : 0);
+}
+
+function getSongDurationDiff(item, song) {
+    const targetDuration = timeToSeconds(song.interval);
+    const itemDuration = timeToSeconds(item.interval);
+    if (targetDuration <= 0 || itemDuration <= 0) return null;
+    return Math.abs(targetDuration - itemDuration);
+}
+
 /**
  * 跨平台寻找相同歌曲的匹配逻辑
  * 基本规则：歌名+歌手+时长匹配
  */
 async function findOtherSourceMatch(song, isSilent = false) {
-    if (!song.name || !song.singer) return null;
+    const matches = await findOtherSourceMatches(song, isSilent);
+    return matches[0] || null;
+}
+
+async function findOtherSourceMatches(song, isSilent = false, options = {}) {
+    if (!song.name || !song.singer) return [];
 
     try {
         // 1. 获取当前自定义源支持解析的平台（支持的平台）
@@ -2898,7 +3010,7 @@ async function findOtherSourceMatch(song, isSilent = false) {
 
         // 3. 过滤出自定义源支持解析的平台
         let searchSources = searchSourcesOrdered;
-        if (supportedPlatforms) {
+        if (supportedPlatforms && !options.ignoreSupportedFilter) {
             searchSources = searchSourcesOrdered.filter(s => supportedPlatforms.has(s));
         }
 
@@ -2906,7 +3018,7 @@ async function findOtherSourceMatch(song, isSilent = false) {
         if (searchSources.length === 0) {
             console.log(`[AutoSource] 换源跳过：没有其他自定义源支持的平台。当前源: ${song.source}`);
             if (!isSilent) showError('未找到自定义源下支持的平台下的对应歌曲');
-            return null;
+            return [];
         }
 
         const query = `${song.name} ${song.singer}`;
@@ -2925,39 +3037,27 @@ async function findOtherSourceMatch(song, isSilent = false) {
         const allResults = await Promise.all(searchPromises);
         const flatResults = allResults.flat();
 
-        if (flatResults.length === 0) return null;
+        if (flatResults.length === 0) return [];
 
-        const targetDuration = timeToSeconds(song.interval);
-        const cleanedTargetName = song.name.toLowerCase().trim();
+        const matches = [];
 
         // 匹配算法
         for (const item of flatResults) {
-            const itemDuration = timeToSeconds(item.interval);
-            const durationDiff = Math.abs(targetDuration - itemDuration);
+            const score = getSongMatchScore(item, song);
+            if (score < 0) continue;
 
-            // 1. 时长校验：误差在 5 秒以内
-            if (durationDiff > 5) continue;
-
-            // 2. 歌名校验：简单包含或相等（忽略大小写）
-            const cleanedItemName = item.name.toLowerCase().trim();
-            if (!cleanedItemName.includes(cleanedTargetName) && !cleanedTargetName.includes(cleanedItemName)) continue;
-
-            // 3. 歌手校验：简单比对
-            if (item.singer && song.singer) {
-                const cleanedItemSinger = item.singer.toLowerCase();
-                const cleanedTargetSinger = song.singer.toLowerCase();
-                if (!cleanedItemSinger.includes(cleanedTargetSinger) && !cleanedTargetSinger.includes(cleanedItemSinger)) continue;
-            }
-
-            console.log(`[AutoSource] 匹配成功: ${item.name} via ${item.source} (时长误差: ${durationDiff}s)`);
-            return item;
+            const durationDiff = getSongDurationDiff(item, song);
+            console.log(`[AutoSource] 匹配成功: ${item.name} via ${item.source} (score: ${score}, 时长误差: ${durationDiff === null ? '未知' : `${durationDiff}s`})`);
+            matches.push({ ...item, _matchScore: score });
         }
 
-        console.log(`[AutoSource] 未找到合适的匹配结果 (Total searched: ${flatResults.length})`);
-        return null;
+        if (matches.length === 0) {
+            console.log(`[AutoSource] 未找到合适的匹配结果 (Total searched: ${flatResults.length})`);
+        }
+        return matches.sort((a, b) => (b._matchScore || 0) - (a._matchScore || 0));
     } catch (e) {
         console.warn('[AutoSource] 匹配逻辑执行出错:', e);
-        return null;
+        return [];
     }
 }
 
@@ -3057,7 +3157,8 @@ async function fetchSongUrl(song, quality, isRetry = false, isSilent = false) {
     const cleanedSong = cleanSongData(song);
     const cacheKey = `lx_url_${cleanedSong.id}_${quality}`;
 
-    const allowServerCache = settings.preferServerCache !== false && isRetry !== 'local_retry';
+    const shouldBypassServerCache = isRetry === 'local_retry' || isRetry === 'download';
+    const allowServerCache = settings.preferServerCache !== false && !shouldBypassServerCache;
     if (allowServerCache) {
         let cacheResult = await checkServerCache(cleanedSong, quality, !!isRetry);
         if (cacheResult.exists && !cacheResult.isCollision) {
@@ -3136,7 +3237,7 @@ async function fetchSongUrl(song, quality, isRetry = false, isSilent = false) {
                     updateStorageStatsUI();
                 } catch (e) { }
             }
-            if (settings.enableServerCache && !finalUrl.includes('/api/music/cache/file/')) {
+            if (settings.enableServerCache && isRetry !== 'download' && !finalUrl.includes('/api/music/cache/file/')) {
                 // [Fix] 传递原始 result.url 而非经过 applyAutoProxy 处理后的相对代理路径，
                 // 否则后端下载器会因无法识别相对路径而报 ERR_INVALID_URL 错误。
                 triggerServerCache(song, result.url, quality);
@@ -6153,6 +6254,8 @@ window.removeCacheItem = removeCacheItem;
 window.clearServerCache = clearServerCache;
 window.handleHotSearchClick = handleHotSearchClick;
 window.playSong = playSong;
+window.resolveSongUrl = resolveSongUrl;
+window.resolveDownloadSongUrl = resolveDownloadSongUrl;
 window.togglePlay = togglePlay;
 window.playNext = playNext;
 window.changeProxyPlayback = changeProxyPlayback;

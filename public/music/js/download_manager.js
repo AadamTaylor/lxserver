@@ -54,6 +54,17 @@ class DownloadManager {
         return Math.min(5, Math.max(1, parsed));
     }
 
+    shouldAutoSyncLyric(task) {
+        return !!(
+            task &&
+            task.isServer &&
+            task.status === 'finished' &&
+            window.requestServerLyricCache &&
+            window.settings?.enableServerLyricCache !== false &&
+            window.settings?.enableOnlyDownloadMode !== true
+        );
+    }
+
     async pollServerProgress() {
         // [Move to top] 对已完成但还未检测过歌词的云端任务，执行检测
         // 这样即使当前没有正在下载的任务，刷新页面后也能触发一次歌词状态刷新
@@ -139,7 +150,7 @@ class DownloadManager {
                             task.progress = 100;
                             task.errorMsg = '';
                             // 成功完成后触发歌词同步（补充）
-                            if (window.requestServerLyricCache && task.status === 'finished') {
+                            if (this.shouldAutoSyncLyric(task)) {
                                 window.requestServerLyricCache(task.song, task.quality).then(() => {
                                     // 延时一下再检查，确保后端写入完成
                                     setTimeout(() => this.checkTaskLyric(task), 2000);
@@ -169,7 +180,7 @@ class DownloadManager {
                             task.speed = 0;
 
                             // 成功完成后触发歌词同步（补充）
-                            if (window.requestServerLyricCache) {
+                            if (this.shouldAutoSyncLyric(task)) {
                                 window.requestServerLyricCache(task.song, task.quality).then(() => {
                                     setTimeout(() => this.checkTaskLyric(task), 2000);
                                 });
@@ -429,13 +440,14 @@ class DownloadManager {
         this.renderTask(task);
 
         try {
-            if (typeof resolveSongUrl !== 'function') throw new Error('resolveSongUrl missing');
+            const downloadResolver = window.resolveDownloadSongUrl || window.resolveSongUrl;
+            if (typeof downloadResolver !== 'function') throw new Error('resolveSongUrl missing');
 
             // 1. Resolve URL
             const quality = task.quality || (window.QualityManager ? window.QualityManager.getBestQuality(task.song, window.settings?.preferredQuality || '320k') : '320k');
             task.quality = quality;
 
-            const result = await resolveSongUrl(task.song, quality, true, 'local_retry');
+            const result = await downloadResolver(task.song, quality, true);
             if (!result || !result.url) throw new Error('解析失败');
 
             const resolvedSong = result.songInfo || task.song;
@@ -513,8 +525,9 @@ class DownloadManager {
                     if (path.includes('.')) ext = path.split('.').pop();
                 } catch (e) { }
             } else {
-                if (typeof resolveSongUrl !== 'function') throw new Error('resolveSongUrl missing');
-                const resolveData = await resolveSongUrl(task.song, quality, true, true);
+                const downloadResolver = window.resolveDownloadSongUrl || window.resolveSongUrl;
+                if (typeof downloadResolver !== 'function') throw new Error('resolveSongUrl missing');
+                const resolveData = await downloadResolver(task.song, quality, true);
                 if (!resolveData || !resolveData.url) throw new Error('No download URL found');
 
                 const resolvedSong = resolveData.songInfo || task.song;
@@ -747,13 +760,14 @@ class DownloadManager {
             // 云端任务：恢复时由于后端进程可能已中止，需要重新触发解析与下载
             (async () => {
                 try {
-                    if (typeof resolveSongUrl !== 'function') throw new Error('resolveSongUrl not available');
+                    const downloadResolver = window.resolveDownloadSongUrl || window.resolveSongUrl;
+                    if (typeof downloadResolver !== 'function') throw new Error('resolveSongUrl not available');
                     // 重新获取音质编码（处理显示名称）
                     let quality = task.quality;
                     if (window.QualityManager) {
                         quality = window.QualityManager.getBestQuality(task.song, quality);
                     }
-                    const result = await resolveSongUrl(task.song, quality, true, 'local_retry');
+                    const result = await downloadResolver(task.song, quality, true);
                     if (!result || !result.url) throw new Error('获取播放地址失败');
 
                     const resolvedSong = result.songInfo || task.song;
@@ -851,14 +865,15 @@ class DownloadManager {
                 // 异步重新触发云端下载
                 (async () => {
                     try {
-                        if (typeof resolveSongUrl !== 'function') throw new Error('resolveSongUrl not available');
+                        const downloadResolver = window.resolveDownloadSongUrl || window.resolveSongUrl;
+                        if (typeof downloadResolver !== 'function') throw new Error('resolveSongUrl not available');
                         // 尝试通过 QualityManager 将可能是显示名称的 quality 转换为原始 code
                         let quality = t.quality;
                         if (window.QualityManager) {
                             // getBestQuality 能处理原始 code 和 preferred 偏好，传入 t.quality 作为偏好，让其降级匹配
                             quality = window.QualityManager.getBestQuality(t.song, quality);
                         }
-                        const result = await resolveSongUrl(t.song, quality, true, 'local_retry');
+                        const result = await downloadResolver(t.song, quality, true);
                         if (!result || !result.url) throw new Error('获取地址失败');
 
                         const resolvedSong = result.songInfo || t.song;
