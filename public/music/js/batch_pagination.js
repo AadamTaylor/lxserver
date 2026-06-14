@@ -93,6 +93,7 @@ function selectAllVisible() {
 }
 
 function deselectAll() {
+    window.batchMode = false;
     window.selectedItems.clear();
     window.selectedSongObjects.clear();
 
@@ -250,9 +251,7 @@ async function batchDeleteFromList() {
     }
 
     // Clear selection and exit batch mode
-    window.selectedItems.clear();
-    window.batchMode = false;
-    toggleBatchMode(); // Update UI
+    deselectAll();
 }
 
 // Helper: Get current active list ID

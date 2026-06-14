@@ -10062,8 +10062,6 @@ async function handleTogglePlaylist(listId, btnElement) {
 
             // Cleanup selection
             if (typeof deselectAll === 'function') deselectAll();
-            if (typeof toggleBatchMode === 'function') toggleBatchMode();
-            if (typeof toggleLbBatchMode === 'function') toggleLbBatchMode();
 
         } catch (e) {
             console.error('[BatchCollect] Sync failed, reverting or refreshing:', e);
