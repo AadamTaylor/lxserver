@@ -150,6 +150,7 @@ window.networkListUpdateMap = new Set();
 let networkListAutoCheckTimer = null;
 
 function parseNetworkListAutoCheckInterval(value) {
+    const minIntervalMs = 30 * 1000;
     if (value === undefined || value === null) return 0;
     const raw = String(value).trim().toLowerCase();
     if (raw === '' || raw === '0' || raw === 'off' || raw === 'none' || raw === 'disable') return 0;
@@ -158,14 +159,16 @@ function parseNetworkListAutoCheckInterval(value) {
     const count = parseFloat(matched[1]);
     const unit = matched[2] || 'h';
     if (!Number.isFinite(count) || count < 0) return null;
+    let intervalMs = null;
     switch (unit) {
-        case 'ms': return count;
-        case 's': return count * 1000;
-        case 'm': return count * 60 * 1000;
-        case 'h': return count * 60 * 60 * 1000;
-        case 'd': return count * 24 * 60 * 60 * 1000;
+        case 'ms': intervalMs = count; break;
+        case 's': intervalMs = count * 1000; break;
+        case 'm': intervalMs = count * 60 * 1000; break;
+        case 'h': intervalMs = count * 60 * 60 * 1000; break;
+        case 'd': intervalMs = count * 24 * 60 * 60 * 1000; break;
         default: return null;
     }
+    return Math.max(intervalMs, minIntervalMs);
 }
 
 function setupNetworkListAutoCheck() {
@@ -203,7 +206,7 @@ async function checkNetworkListUpdates(manual = false) {
 
     for (const list of targetLists) {
         try {
-            const url = `${API_BASE}/songList/detail?source=${list.source}&id=${encodeURIComponent(list.sourceListId)}&page=1`;
+            const url = `${API_BASE}/songList/detail?source=${encodeURIComponent(list.source)}&id=${encodeURIComponent(list.sourceListId)}&page=1`;
             const res = await fetch(url);
             const data = await res.json();
             if (!data || !Array.isArray(data.list)) {
@@ -8779,7 +8782,7 @@ async function handleRefreshList(listId, event, silent = false) {
     if (window.showToast) window.showToast('info', '正在同步最新歌单内容...');
 
     try {
-        const url = `${API_BASE}/songList/detail?source=${list.source}&id=${encodeURIComponent(list.sourceListId)}&page=1`;
+        const url = `${API_BASE}/songList/detail?source=${encodeURIComponent(list.source)}&id=${encodeURIComponent(list.sourceListId)}&page=1`;
         const res = await fetch(url);
         const data = await res.json();
 

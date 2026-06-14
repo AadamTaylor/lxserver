@@ -32,7 +32,7 @@ class DownloadManager {
         try {
             const proxyParams = new URLSearchParams(url.includes('?') ? url.split('?')[1] : '');
             const extracted = proxyParams.get('url');
-            return extracted ? decodeURIComponent(extracted) : url;
+            return extracted || url;
         } catch (e) {
             return url;
         }
