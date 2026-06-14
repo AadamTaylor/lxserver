@@ -411,7 +411,7 @@ class DownloadManager {
             const quality = task.quality || (window.QualityManager ? window.QualityManager.getBestQuality(task.song, window.settings?.preferredQuality || '320k') : '320k');
             task.quality = quality;
 
-            const result = await resolveSongUrl(task.song, quality, true, true);
+            const result = await resolveSongUrl(task.song, quality, true, 'local_retry');
             if (!result || !result.url) throw new Error('解析失败');
 
             const resolvedSong = result.songInfo || task.song;
@@ -728,7 +728,7 @@ class DownloadManager {
                     if (window.QualityManager) {
                         quality = window.QualityManager.getBestQuality(task.song, quality);
                     }
-                    const result = await resolveSongUrl(task.song, quality, true, true);
+                    const result = await resolveSongUrl(task.song, quality, true, 'local_retry');
                     if (!result || !result.url) throw new Error('获取播放地址失败');
 
                     const resolvedSong = result.songInfo || task.song;
@@ -833,7 +833,7 @@ class DownloadManager {
                             // getBestQuality 能处理原始 code 和 preferred 偏好，传入 t.quality 作为偏好，让其降级匹配
                             quality = window.QualityManager.getBestQuality(t.song, quality);
                         }
-                        const result = await resolveSongUrl(t.song, quality, true, true);
+                        const result = await resolveSongUrl(t.song, quality, true, 'local_retry');
                         if (!result || !result.url) throw new Error('获取地址失败');
 
                         const resolvedSong = result.songInfo || t.song;
