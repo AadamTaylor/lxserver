@@ -2335,10 +2335,6 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
               res.end('Missing params')
               return
             }
-            if (namingPattern) {
-              fileCache.setNamingPattern(namingPattern)
-              if (global.lx.config) global.lx.config['cache.namingPattern'] = namingPattern
-            }
 
             // Fire and forget (background download) with Abort support
             const reqUsername = (req.headers['x-user-name'] as string) || ''
@@ -2353,6 +2349,10 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                 return
               }
               username = verified
+            }
+            if (namingPattern) {
+              fileCache.setNamingPattern(namingPattern)
+              if (global.lx.config) global.lx.config['cache.namingPattern'] = namingPattern
             }
             const songKey = fileCache.normalizeSongId(songInfo) + '_' + (quality || 'unknown')
 

@@ -149,6 +149,16 @@ window.settings = settings; // 显式挂载到 window
 window.networkListUpdateMap = new Set();
 let networkListAutoCheckTimer = null;
 
+function escapeHtmlText(value) {
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+    })[ch]);
+}
+
 function parseNetworkListAutoCheckInterval(value) {
     const minIntervalMs = 30 * 1000;
     if (value === undefined || value === null) return 0;
@@ -239,13 +249,15 @@ async function checkNetworkListUpdates(manual = false) {
     }
 
     if (manual) {
+        const changedListNames = changedLists.map(escapeHtmlText);
+        const failedListNames = failedLists.map(escapeHtmlText);
         if (changedLists.length > 0) {
-            showSuccess(`检测到 ${changedLists.length} 个歌单已更新：${changedLists.join('、')}`);
-        } else {
+            showSuccess(`检测到 ${changedLists.length} 个歌单已更新：${changedListNames.join('、')}`);
+        } else if (failedLists.length === 0) {
             showSuccess('所有网络歌单均为最新状态');
         }
         if (failedLists.length > 0) {
-            showError(`部分歌单检测失败：${failedLists.join('、')}`);
+            showError(`部分歌单检测失败：${failedListNames.join('、')}`);
         }
     } else if (changedLists.length > 0 && window.showToast) {
         showToast('info', `检测到 ${changedLists.length} 个网络歌单有更新`, 5000);
@@ -3817,6 +3829,15 @@ async function playSong(song, index, forceQuality = null, noPlay = false, isRetr
         let finalUrl = urlResult.url;
         currentQuality = urlResult.quality;
         currentSourceType = urlResult.sourceType;
+        const playbackSong = (urlResult.switchedSource && urlResult.songInfo) ? urlResult.songInfo : song;
+        if (playbackSong !== song) {
+            currentPlayingSong = playbackSong;
+            window.currentPlayingSong = playbackSong;
+            if (currentRecoveryState) currentRecoveryState.currentSong = playbackSong;
+            updatePlayerInfo(playbackSong);
+            updateMediaSessionMetadata(playbackSong);
+            fetchLyric(playbackSong, currentQuality);
+        }
 
         // [Sync] 确定了最终播放音质后，直接以正确音质重写服务器端歌词缓存文件名
         // 注意：不能再调用 fetchLyric(song)，因为歌词已就绪时 fetchLyric 会提前返回，
@@ -3830,7 +3851,7 @@ async function playSong(song, index, forceQuality = null, noPlay = false, isRetr
                     method: 'POST',
                     headers: _lyricHeaders,
                     body: JSON.stringify({
-                        songInfo: { ...song, quality: currentQuality },
+                        songInfo: { ...playbackSong, quality: currentQuality },
                         lyricsObj: { lyric: currentRawLrc, tlyric: currentRawTlrc, rlyric: currentRawRlrc, lxlyric: currentRawKlrc }
                     })
                 }).catch(e => console.warn('[Lyric] 音质确定后重写服务端缓存失败:', e));
@@ -3843,8 +3864,8 @@ async function playSong(song, index, forceQuality = null, noPlay = false, isRetr
         if (currentSourceType !== 'normal') {
             const retryHandler = () => {
                 console.warn(`[Player] ${currentSourceType} link failed, retrying online...`);
-                if (currentSourceType === 'cache') localStorage.removeItem(`lx_url_${cleanSongData(song).id}_${targetQuality}`);
-                playSong(song, index, targetQuality, noPlay, currentSourceType === 'server_cache' ? 'local_retry' : true);
+                if (currentSourceType === 'cache') localStorage.removeItem(`lx_url_${cleanSongData(playbackSong).id}_${targetQuality}`);
+                playSong(playbackSong, index, targetQuality, noPlay, currentSourceType === 'server_cache' ? 'local_retry' : true);
             };
             audio.addEventListener('error', retryHandler, { once: true });
             const cleanup = () => audio.removeEventListener('error', retryHandler);
@@ -3878,10 +3899,10 @@ async function playSong(song, index, forceQuality = null, noPlay = false, isRetr
             updatePlayButton(true);
 
             // Save history and handle list logic
-            savePlayHistory(song, currentQuality);
+            savePlayHistory(playbackSong, currentQuality);
             const finalAdd = shouldAddToDefault !== null ? shouldAddToDefault : (currentPlayingScope === 'network' || currentPlayingScope === 'songlist' || currentPlayingScope === 'leaderboard');
             if (finalAdd) {
-                addToDefaultList(song);
+                addToDefaultList(playbackSong);
                 // 切换逻辑说明：
                 // - 搜索结果(network)：updatePlaylist 把队列设为搜索结果，开启设置才把队列切换到 defaultList
                 // - 歌单/排行榜(songlist/leaderboard)：updatePlaylist 已把队列设为歌单/排行榜，
@@ -5213,6 +5234,15 @@ async function updateSetting(key, value) {
         }
     }
 
+    if (key === 'networkListAutoCheckInterval') {
+        const intervalMs = parseNetworkListAutoCheckInterval(value);
+        if (intervalMs === null) {
+            showError('无效的自动检测间隔，请使用 30m / 6h / 1d 等格式');
+            syncSettingsUI(key, settings[key]);
+            return;
+        }
+    }
+
     settings[key] = value;
     window.settings = settings; // 确保全局引用同步
     try {
@@ -5224,10 +5254,6 @@ async function updateSetting(key, value) {
     // 实时同步 UI 并应用效果
     syncSettingsUI(key, value);
     if (key === 'networkListAutoCheckInterval' || key === 'autoUpdateNetworkList') {
-        const intervalMs = parseNetworkListAutoCheckInterval(settings.networkListAutoCheckInterval);
-        if (key === 'networkListAutoCheckInterval' && intervalMs === null) {
-            showError('无效的自动检测间隔，请使用 30m / 6h / 1d 等格式');
-        }
         setupNetworkListAutoCheck();
     }
 
@@ -7758,6 +7784,7 @@ async function fetchSettingsFromServer() {
             localStorage.setItem('lx_settings', JSON.stringify(settings));
             // Update UI
             syncSettingsUI();
+            setupNetworkListAutoCheck();
             if (typeof showSuccess === 'function') {
                 showSuccess('已从服务器恢复设置');
             }
@@ -8784,7 +8811,8 @@ async function handleRefreshList(listId, event, silent = false) {
     }
 
     if (!silent) {
-        const confirmed = await showSelect('更新歌单', `是否更新当前歌单 "${list.name}"？\n(确认后将重新从服务器拉取歌单并覆盖当前内容)`, {
+        const safeListName = escapeHtmlText(list.name || list.id || list.sourceListId || '');
+        const confirmed = await showSelect('更新歌单', `是否更新当前歌单 "${safeListName}"？\n(确认后将重新从服务器拉取歌单并覆盖当前内容)`, {
             confirmText: '确定更新',
             confirmColor: 'bg-emerald-500'
         });
@@ -10074,7 +10102,8 @@ async function handleTogglePlaylist(listId, btnElement) {
             }
 
             // Cleanup selection
-            if (typeof deselectAll === 'function') deselectAll();
+            if (typeof exitBatchMode === 'function') exitBatchMode();
+            else if (typeof deselectAll === 'function') deselectAll();
 
         } catch (e) {
             console.error('[BatchCollect] Sync failed, reverting or refreshing:', e);

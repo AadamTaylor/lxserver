@@ -1295,7 +1295,7 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
 
             let lyricFilename: string | undefined
             const sourceLyricPath = result.path.substring(0, result.path.length - ext.length) + '.lrc'
-            if (fs.existsSync(sourceLyricPath)) {
+            if (shouldCacheLyric && fs.existsSync(sourceLyricPath)) {
                 const targetLyricPath = path.join(dir, baseName + '.lrc')
                 fs.copyFileSync(sourceLyricPath, targetLyricPath)
                 lyricFilename = path.basename(targetLyricPath)
@@ -1335,6 +1335,7 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
         let settled = false
 
         const fail = (err: Error) => {
+            if (settled) return
             const message = err.message || 'Download failed'
             cacheProgress.set(songKey, { progress: 0, status: 'error', errorMsg: message })
             settle(() => reject(err))
@@ -1449,8 +1450,8 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
                         try {
                             const lyricText = await _lyricFetcher({ ...songInfo, quality })
                             if (lyricText) {
-                                const lyricsObj = parseLyrics(lyricText)
                                 if (shouldCacheLyric) {
+                                    const lyricsObj = parseLyrics(lyricText)
                                     saveLyricCache({ ...songInfo, quality }, lyricsObj, username, isOnlyDownload)
                                 }
                                 if (shouldEmbedLyric) {

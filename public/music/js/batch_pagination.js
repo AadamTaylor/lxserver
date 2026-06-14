@@ -92,14 +92,9 @@ function selectAllVisible() {
     updateBatchToolbar();
 }
 
-function deselectAll() {
-    window.batchMode = false;
+function clearSelection() {
     window.selectedItems.clear();
     window.selectedSongObjects.clear();
-
-    const batchToolbar = document.getElementById('batch-toolbar');
-    const slToolbar = document.getElementById('sl-batch-toolbar');
-    const lbBatchToolbar = document.getElementById('lb-batch-toolbar');
 
     // updateBatchToolbar() 会被调用，这里也主动清零防遗漏
     const countEl = document.getElementById('batch-selected-count');
@@ -109,6 +104,22 @@ function deselectAll() {
     if (slCountEl) slCountEl.textContent = '0';
     if (lbCountEl) lbCountEl.textContent = '0';
 
+    // 重新渲染UI
+    refreshBatchUI();
+    if (window.LeaderboardManager && document.getElementById('view-leaderboard') && !document.getElementById('view-leaderboard').classList.contains('hidden')) {
+        window.LeaderboardManager.renderSongs();
+    }
+    updateBatchToolbar();
+}
+
+function exitBatchMode() {
+    window.batchMode = false;
+    clearSelection();
+
+    const batchToolbar = document.getElementById('batch-toolbar');
+    const slToolbar = document.getElementById('sl-batch-toolbar');
+    const lbBatchToolbar = document.getElementById('lb-batch-toolbar');
+
     if (batchToolbar) batchToolbar.classList.add('hidden');
     if (slToolbar) slToolbar.classList.add('hidden');
     if (lbBatchToolbar) lbBatchToolbar.classList.add('hidden');
@@ -116,13 +127,10 @@ function deselectAll() {
     // 恢复被隐藏的分页控件 (在排行榜中)
     const lbPagination = document.getElementById('lb-pagination');
     if (lbPagination) lbPagination.classList.remove('hidden');
+}
 
-    // 重新渲染UI
-    refreshBatchUI();
-    if (window.LeaderboardManager && document.getElementById('view-leaderboard') && !document.getElementById('view-leaderboard').classList.contains('hidden')) {
-        window.LeaderboardManager.renderSongs();
-    }
-    updateBatchToolbar();
+function deselectAll() {
+    clearSelection();
 }
 
 function updateBatchToolbar() {
@@ -251,7 +259,7 @@ async function batchDeleteFromList() {
     }
 
     // Clear selection and exit batch mode
-    deselectAll();
+    exitBatchMode();
 }
 
 // Helper: Get current active list ID
@@ -448,6 +456,8 @@ async function handleBatchCollect() {
 window.handleBatchSelect = handleBatchSelect;
 window.toggleBatchMode = toggleBatchMode;
 window.selectAllVisible = selectAllVisible;
+window.clearSelection = clearSelection;
+window.exitBatchMode = exitBatchMode;
 window.deselectAll = deselectAll;
 window.batchDeleteFromList = batchDeleteFromList;
 window.handleBatchCollect = handleBatchCollect;

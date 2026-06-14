@@ -363,7 +363,8 @@ async function batchDownloadFromList() {
 
             showInfo(`已将 ${songsToDownload.length} 项任务添加到下载列表，您可以前往右侧下载管理面板查看进度`);
             // Clean up selection optionally
-            if (typeof deselectAll === 'function') deselectAll();
+            if (typeof exitBatchMode === 'function') exitBatchMode();
+            else if (typeof deselectAll === 'function') deselectAll();
         } else {
             showError('下载管理器未就绪');
         }
@@ -410,7 +411,8 @@ async function batchDownloadFromList() {
         });
         window.SystemDownloadManager.addTasks(tasks);
 
-        if (typeof deselectAll === 'function') deselectAll();
+        if (typeof exitBatchMode === 'function') exitBatchMode();
+        else if (typeof deselectAll === 'function') deselectAll();
         showInfo(`已将 ${songsToDownload.length} 首歌曲加入缓存队列`);
     }
 }
