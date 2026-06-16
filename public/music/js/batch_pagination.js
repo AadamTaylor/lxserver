@@ -43,8 +43,10 @@ function refreshBatchUI() {
         if (window.SongListManager) window.SongListManager.renderDetail();
     } else if (artistHeader) {
         // Artist Detail Mode
-        if (typeof loadArtistSongs === 'function' && window.currentArtistId) {
-            loadArtistSongs(window.currentArtistId, window.currentArtistOrder || 'hot');
+        if (window.currentArtistSongsCache) {
+            renderArtistSongsUI(window.currentArtistSongsCache);
+        } else if (typeof loadArtistSongs === 'function' && window.currentArtistId) {
+            loadArtistSongs(window.currentArtistId, window.currentArtistSource || 'wy', window.currentArtistOrder || 'hot');
         }
     } else {
         // Fallback to main renderResults (for search view)

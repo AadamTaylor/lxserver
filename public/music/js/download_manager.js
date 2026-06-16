@@ -27,6 +27,20 @@ class DownloadManager {
         this.restoreTasks();
     }
 
+    async mapWithConcurrency(items, limit, mapper) {
+        const results = new Array(items.length);
+        let nextIndex = 0;
+        const workerCount = Math.min(limit, items.length);
+        const workers = Array.from({ length: workerCount }, async () => {
+            while (nextIndex < items.length) {
+                const index = nextIndex++;
+                results[index] = await mapper(items[index], index);
+            }
+        });
+        await Promise.all(workers);
+        return results;
+    }
+
     extractRawDownloadUrl(url) {
         if (!url || !url.startsWith('/api/music/download')) return url;
         try {
@@ -54,6 +68,31 @@ class DownloadManager {
         return Math.min(5, Math.max(1, parsed));
     }
 
+    getDownloadResolver() {
+        return window.resolveDownloadSongUrl || window.resolveSongUrl;
+    }
+
+    async waitForDownloadResolver(timeoutMs = 10000) {
+        const resolver = this.getDownloadResolver();
+        if (typeof resolver === 'function') return resolver;
+
+        const startedAt = Date.now();
+        return new Promise((resolve, reject) => {
+            const timer = setInterval(() => {
+                const currentResolver = this.getDownloadResolver();
+                if (typeof currentResolver === 'function') {
+                    clearInterval(timer);
+                    resolve(currentResolver);
+                    return;
+                }
+                if (Date.now() - startedAt >= timeoutMs) {
+                    clearInterval(timer);
+                    reject(new Error('resolveSongUrl missing'));
+                }
+            }, 50);
+        });
+    }
+
     shouldAutoSyncLyric(task) {
         return !!(
             task &&
@@ -63,6 +102,39 @@ class DownloadManager {
             window.settings?.enableServerLyricCache !== false &&
             window.settings?.enableOnlyDownloadMode !== true
         );
+    }
+
+    completeServerTask(task, status = 'finished') {
+        task.status = status;
+        task.progress = 100;
+        task.errorMsg = '';
+        task.speed = 0;
+
+        if (this.shouldAutoSyncLyric(task)) {
+            window.requestServerLyricCache(task.song, task.quality).then(() => {
+                setTimeout(() => this.checkTaskLyric(task), 2000);
+            });
+        }
+
+        this.renderTask(task);
+        this.saveTasks();
+        this.processQueue();
+    }
+
+    async refreshMissingServerTask(task) {
+        if (task.cacheRecheckPending) return;
+        task.cacheRecheckPending = true;
+        try {
+            const checker = window.checkServerCache || (typeof checkServerCache === 'function' ? checkServerCache : null);
+            const check = checker ? await checker(task.song, task.quality, true) : null;
+            if (check && check.exists && !check.isCollision) {
+                this.completeServerTask(task, 'finished');
+            }
+        } catch (e) {
+            console.warn('[DownloadManager] Missing progress cache recheck failed:', task.id, e);
+        } finally {
+            task.cacheRecheckPending = false;
+        }
     }
 
     async pollServerProgress() {
@@ -146,6 +218,8 @@ class DownloadManager {
                         task.totalBytes = progressInfo.total || 0;
 
                         if (progressInfo.status === 'tagging' || progressInfo.status === 'finished' || progressInfo.status === 'exists') {
+                            this.completeServerTask(task, progressInfo.status === 'exists' ? 'exists' : 'finished');
+                            return;
                             if (progressInfo.status === 'tagging') task.status = 'finished';
                             task.progress = 100;
                             task.errorMsg = '';
@@ -189,6 +263,8 @@ class DownloadManager {
                             this.renderTask(task);
                             this.saveTasks();
                             this.processQueue();
+                        } else if (task.isServer) {
+                            this.refreshMissingServerTask(task);
                         }
                     }
                 });
@@ -329,6 +405,35 @@ class DownloadManager {
         };
     }
 
+    getSongInfoForStorage(song) {
+        if (!song) return {};
+        return {
+            id: song.id,
+            songmid: song.songmid,
+            songId: song.songId,
+            source: song.source,
+            name: song.name,
+            singer: song.singer,
+            albumName: song.albumName,
+            albumId: song.albumId,
+            albumMid: song.albumMid,
+            interval: song.interval,
+            img: song.img,
+            types: song.types,
+            _types: song._types,
+            strMediaMid: song.strMediaMid,
+            hash: song.hash,
+            meta: song.meta ? {
+                songmid: song.meta.songmid,
+                songId: song.meta.songId,
+                source: song.meta.source,
+                picUrl: song.meta.picUrl,
+                singerName: song.meta.singerName,
+                songName: song.meta.songName
+            } : undefined
+        };
+    }
+
     // [Unified] Status generator for drawer lists
     getStatusHtml(icon, text, isSpin = false) {
         return `
@@ -343,13 +448,13 @@ class DownloadManager {
     async addTasks(songs) {
         if (!songs || songs.length === 0) return;
 
-        // Parallelize cache checks for performance
-        const results = await Promise.all(songs.map(async (song) => {
+        // Keep large batches responsive by limiting concurrent preflight requests.
+        const results = await this.mapWithConcurrency(songs, 8, async (song) => {
             const targetPref = song.quality || window.settings?.preferredQuality || '320k';
             const quality = window.QualityManager ? window.QualityManager.getBestQuality(song, targetPref) : targetPref;
             const cacheResult = await checkServerCache(song, quality, true);
             return { song, quality, cacheResult };
-        }));
+        });
 
         let skipCount = 0;
         for (const { song, quality, cacheResult } of results) {
@@ -396,7 +501,7 @@ class DownloadManager {
             window.showInfo(`${skipCount} 首歌曲已存在，已跳过`);
         }
 
-        // Auto open drawer if needed
+        // Auto open drawer; renderList only paints the first visible slice for large batches.
         if (this.drawer && this.drawer.classList.contains('translate-x-full')) {
             this.toggleDrawer();
         }
@@ -413,22 +518,20 @@ class DownloadManager {
         const serverActive = this.tasks.filter(t => t.isServer && (t.status === 'downloading' || t.status === 'tagging')).length;
         this.activeCount = localActive + serverActive;
 
-        if (this.activeCount >= this.maxConcurrent) {
-            this.renderList();
-            this.updateGlobalProgress();
-            return;
-        }
-
-        // Find next task (could be local or server)
-        const nextTask = this.tasks.find(t => t.status === 'waiting');
-        if (nextTask) {
+        while (this.activeCount < this.maxConcurrent) {
+            const nextTask = this.tasks.find(t => t.status === 'waiting');
+            if (!nextTask) break;
+            if (typeof this.getDownloadResolver() !== 'function') {
+                setTimeout(() => this.processQueue(), 100);
+                break;
+            }
+            nextTask.status = 'starting';
+            this.activeCount++;
             if (nextTask.isServer) {
                 this.startServerDownload(nextTask);
             } else {
                 this.startDownload(nextTask);
             }
-            // Recurse to fill other slots
-            this.processQueue();
         }
         this.renderList();
         this.updateGlobalProgress();
@@ -440,8 +543,7 @@ class DownloadManager {
         this.renderTask(task);
 
         try {
-            const downloadResolver = window.resolveDownloadSongUrl || window.resolveSongUrl;
-            if (typeof downloadResolver !== 'function') throw new Error('resolveSongUrl missing');
+            const downloadResolver = await this.waitForDownloadResolver();
 
             // 1. Resolve URL
             const quality = task.quality || (window.QualityManager ? window.QualityManager.getBestQuality(task.song, window.settings?.preferredQuality || '320k') : '320k');
@@ -525,8 +627,7 @@ class DownloadManager {
                     if (path.includes('.')) ext = path.split('.').pop();
                 } catch (e) { }
             } else {
-                const downloadResolver = window.resolveDownloadSongUrl || window.resolveSongUrl;
-                if (typeof downloadResolver !== 'function') throw new Error('resolveSongUrl missing');
+                const downloadResolver = await this.waitForDownloadResolver();
                 const resolveData = await downloadResolver(task.song, quality, true);
                 if (!resolveData || !resolveData.url) throw new Error('No download URL found');
 
@@ -760,8 +861,7 @@ class DownloadManager {
             // 云端任务：恢复时由于后端进程可能已中止，需要重新触发解析与下载
             (async () => {
                 try {
-                    const downloadResolver = window.resolveDownloadSongUrl || window.resolveSongUrl;
-                    if (typeof downloadResolver !== 'function') throw new Error('resolveSongUrl not available');
+                    const downloadResolver = await this.waitForDownloadResolver();
                     // 重新获取音质编码（处理显示名称）
                     let quality = task.quality;
                     if (window.QualityManager) {
@@ -865,8 +965,7 @@ class DownloadManager {
                 // 异步重新触发云端下载
                 (async () => {
                     try {
-                        const downloadResolver = window.resolveDownloadSongUrl || window.resolveSongUrl;
-                        if (typeof downloadResolver !== 'function') throw new Error('resolveSongUrl not available');
+                        const downloadResolver = await this.waitForDownloadResolver();
                         // 尝试通过 QualityManager 将可能是显示名称的 quality 转换为原始 code
                         let quality = t.quality;
                         if (window.QualityManager) {
@@ -970,10 +1069,12 @@ class DownloadManager {
     // Persist tasks to sessionStorage
     saveTasks() {
         try {
+            const maxSavedTasks = 200;
+            const tasksToSave = this.tasks.slice(0, maxSavedTasks);
             // Serialize only the data we need, not the AbortController
-            const data = this.tasks.map(t => ({
+            const data = tasksToSave.map(t => ({
                 id: t.id,
-                song: t.song,
+                song: this.getSongInfoForStorage(t.song),
                 isServer: t.isServer,
                 quality: t.quality,
                 status: t.status === 'downloading' ? (t.isServer ? 'waiting' : 'waiting') : t.status,
@@ -1215,7 +1316,13 @@ class DownloadManager {
             return;
         }
 
-        this.listContainer.innerHTML = this.tasks.map(t => this.renderTaskHtml(t)).join('');
+        const renderLimit = 80;
+        const visibleTasks = this.tasks.slice(0, renderLimit);
+        const hiddenCount = this.tasks.length - visibleTasks.length;
+        const hiddenHtml = hiddenCount > 0
+            ? `<div class="text-center text-xs t-text-muted py-3">还有 ${hiddenCount} 个任务在队列中，完成后会自动处理</div>`
+            : '';
+        this.listContainer.innerHTML = visibleTasks.map(t => this.renderTaskHtml(t)).join('') + hiddenHtml;
         // 触发标题滚动检测
         if (typeof applyMarqueeChecks === 'function') applyMarqueeChecks();
     }

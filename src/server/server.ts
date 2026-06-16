@@ -3770,15 +3770,15 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
           res.writeHead(400); res.end('Missing id'); return
         }
         try {
-          const MAX_PAGES = 5  // 最多拉取 5 页 = 500 首
           const PAGE_SIZE = 100
+          const MAX_PAGES = 100
           let allSongs: any[] = []
           for (let p = 1; p <= MAX_PAGES; p++) {
             const data = await musicSdk[source].extendDetail.getArtistSongs(id, p, PAGE_SIZE, order)
             const pageList: any[] = data.list || []
             allSongs = allSongs.concat(pageList)
-            // 如果本页返回数量小于 PAGE_SIZE，说明已经是最后一页
-            if (pageList.length < PAGE_SIZE) break
+            const total = Number(data.total) || 0
+            if (pageList.length < PAGE_SIZE || (total > 0 && allSongs.length >= total)) break
           }
           res.writeHead(200, { 'Content-Type': 'application/json' })
           res.end(JSON.stringify(allSongs))

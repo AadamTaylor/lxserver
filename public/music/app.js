@@ -1752,6 +1752,8 @@ window.searchBySinger = searchBySinger;
 let currentArtistId = null;
 let currentArtistSource = 'wy';
 let currentArtistInfo = null;
+window.currentArtistId = null;
+window.currentArtistSource = 'wy';
 
 async function enterArtist(id, source = 'wy', order = 'hot', tab = 'songs', isBack = false) {
     const typeEl = document.getElementById('search-type');
@@ -1764,14 +1766,24 @@ async function enterArtist(id, source = 'wy', order = 'hot', tab = 'songs', isBa
         window.history.pushState({ page: 'search-detail' }, '');
     }
 
+    const isDifferentArtist = String(currentArtistId || '') !== String(id) || currentArtistSource !== source;
+    if (isDifferentArtist) {
+        window.currentArtistSongsCache = null;
+        window.currentArtistAlbumsCache = null;
+    }
+
     currentArtistId = id;
+    currentArtistSource = source;
+    window.currentArtistId = id;
+    window.currentArtistSource = source;
+    window.currentArtistOrder = order;
     window.currentArtistTab = tab;
     const resultsContainer = document.getElementById('search-results');
     const header = document.getElementById('search-results-header');
     if (header) header.classList.add('hidden');
 
     // 只有在没有缓存或者 ID 变化时才获取详情
-    if (!currentArtistInfo || currentArtistInfo.id != id) {
+    if (!currentArtistInfo || String(currentArtistInfo.id) !== String(id) || currentArtistInfo.source !== source) {
         // 如果还没有头部，显示加载
         if (!document.getElementById('artist-detail-header')) {
             resultsContainer.innerHTML = '<div class="flex items-center justify-center h-full"><i class="fas fa-spinner fa-spin text-4xl text-emerald-500"></i></div>';
@@ -2192,6 +2204,8 @@ window.artistSongsNextPage = artistSongsNextPage;
 
 async function loadArtistAlbums(id, source, forceFetch = false) {
     if (!forceFetch && window.currentArtistAlbumsCache && window.currentArtistId === id && window.currentArtistSource === source) {
+        window.currentArtistId = id;
+        window.currentArtistSource = source;
         renderArtistAlbumsUI(window.currentArtistAlbumsCache);
         return;
     }
@@ -2204,6 +2218,7 @@ async function loadArtistAlbums(id, source, forceFetch = false) {
 
         window.currentArtistAlbumsCache = list;
         window.currentArtistId = id;
+        window.currentArtistSource = source;
 
         renderArtistAlbumsUI(list);
     } catch (e) {
@@ -2239,7 +2254,7 @@ function renderArtistAlbumsUI(list) {
                     <span class="text-sm font-bold t-text-main line-clamp-2 h-10 leading-5 mb-1 group-hover:text-emerald-600 transition-colors" title="${album.name}">${album.name}</span>
                     <div class="flex items-center justify-between mt-1">
                         <span class="text-[10px] t-text-muted">${album.publishTime}</span>
-                        <span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 font-bold">${album.total} 首</span>
+                        <span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 font-bold">${album.total ?? album.count ?? album.size ?? album.songCount ?? 0} 首</span>
                     </div>
                 </div>
             `).join('')}
