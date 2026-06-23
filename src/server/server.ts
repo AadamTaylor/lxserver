@@ -3223,22 +3223,31 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                   const chunks: any[] = []
                   let received = 0
                   const total = parseInt(proxyRes.headers['content-length'] as string || '0', 10)
+                  let lastSpeedAt = Date.now()
+                  let lastSpeedBytes = 0
+                  let currentSpeed = 0
 
                   if (taskId) {
-                    fileCache.cacheProgress.set(taskId, { progress: 0, status: 'downloading', total, received: 0 })
+                    fileCache.cacheProgress.set(taskId, { progress: 0, status: 'downloading', total, received: 0, speed: 0, updatedAt: Date.now() })
                   }
 
                   proxyRes.on('data', (c: any) => {
                     chunks.push(c)
                     if (taskId) {
                       received += c.length
+                      const now = Date.now()
+                      if (now - lastSpeedAt >= 1000) {
+                        currentSpeed = Math.max(0, (received - lastSpeedBytes) / ((now - lastSpeedAt) / 1000))
+                        lastSpeedAt = now
+                        lastSpeedBytes = received
+                      }
                       const progress = total > 0 ? Math.round((received / total) * 100) : 0
-                      fileCache.cacheProgress.set(taskId, { progress, status: 'downloading', total, received })
+                      fileCache.cacheProgress.set(taskId, { progress, status: 'downloading', total, received, speed: currentSpeed, updatedAt: now })
                     }
                   })
                   proxyRes.on('end', async () => {
                     if (taskId) {
-                      fileCache.cacheProgress.set(taskId, { progress: 100, status: 'tagging', total, received: total })
+                      fileCache.cacheProgress.set(taskId, { progress: 100, status: 'tagging', total, received, speed: 0, updatedAt: Date.now() })
                     }
                     try {
                       const buffer = Buffer.concat(chunks)
@@ -3301,7 +3310,7 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                       tagger.dispose()
 
                       if (taskId) {
-                        fileCache.cacheProgress.set(taskId, { progress: 100, status: 'finished', total, received: total })
+                        fileCache.cacheProgress.set(taskId, { progress: 100, status: 'finished', total: total || received, received, speed: 0, updatedAt: Date.now() })
                         setTimeout(() => fileCache.cacheProgress.delete(taskId), 30000)
                       }
 

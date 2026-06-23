@@ -1,6 +1,7 @@
 
 
 import fs from 'fs'
+import type { Stats } from 'fs'
 import path from 'path'
 import http from 'http'
 import https from 'https'
@@ -36,7 +37,7 @@ let currentCacheLocation = CACHE_ROOTS.ROOT
 
 // Helper to get actual directory path
 // [Unified Enhancement] Cache Progress Tracker
-export const cacheProgress: Map<string, { progress: number; status: string; total?: number; received?: number; errorMsg?: string }> = new Map()
+export const cacheProgress: Map<string, { progress: number; status: string; total?: number; received?: number; speed?: number; updatedAt?: number; errorMsg?: string }> = new Map()
 
 // [New] Active Cache Tasks Tracker: username -> [ { songKey, controller } ]
 export const activeTasks: Map<string, Array<{ songKey: string, controller: AbortController }>> = new Map()
@@ -103,6 +104,9 @@ interface CacheItem {
     hasCover?: boolean
     hasLyric?: boolean
     hasEmbedLyric?: boolean
+    coverCheckedVersion?: number
+    coverCheckedMtime?: number
+    coverCheckedSize?: number
     bitrate?: number
     sampleRate?: number
     bitDepth?: number
@@ -220,6 +224,50 @@ class CacheIndexManager {
 }
 
 export const indexManager = new CacheIndexManager()
+
+const COVER_CHECK_VERSION = 2
+
+const getCoverCacheHash = (filename: string, stats?: Stats) => {
+    const version = stats ? `${stats.size}:${stats.mtimeMs}` : ''
+    return crypto.createHash('md5').update(`${filename}:${version}`).digest('hex')
+}
+
+const resolveCacheRelativePath = (dir: string, filename: string) => {
+    const root = path.resolve(dir)
+    const resolved = path.resolve(root, filename)
+    if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+        return null
+    }
+    return resolved
+}
+
+const hasValidPictureData = (picture: any) => {
+    if (!picture || !picture.data) return false
+    if (typeof picture.data.length === 'number') return picture.data.length > 0
+    if (typeof picture.data.byteLength === 'number') return picture.data.byteLength > 0
+    return false
+}
+
+const hasValidEmbeddedCover = (pictures: any) => {
+    return Array.isArray(pictures) && pictures.some(hasValidPictureData)
+}
+
+const isPlaceholderCoverUrl = (url: any) => {
+    return typeof url === 'string' && /\/T002R\d+x\d+M000\.jpg(?:$|\?)/.test(url)
+}
+
+const readEmbeddedCoverState = (filePath: string) => {
+    let tagger: any
+    try {
+        tagger = new MusicTagger()
+        tagger.loadPath(filePath)
+        return hasValidEmbeddedCover(tagger.pictures)
+    } catch (e) {
+        return false
+    } finally {
+        try { if (tagger) tagger.dispose() } catch (e) { }
+    }
+}
 
 // Ensure directory exists
 const ensureDir = (username?: string, isOnlyDownload?: boolean) => {
@@ -464,8 +512,14 @@ export const syncCacheIndex = async (username?: string) => {
 
             let finalQuality = quality || 'unknown'
 
-            // Update or add to index if anything changed (size, mtime, or lyric status)
-            if (!existing || existing.size !== stats.size || existing.hasLyric !== hasLyricOnDisk || !existing.interval || existing.quality === 'unknown' || !existing.bitrate) {
+            const needsCoverCheck = !existing ||
+                existing.coverCheckedVersion !== COVER_CHECK_VERSION ||
+                existing.coverCheckedMtime !== stats.mtimeMs ||
+                existing.coverCheckedSize !== stats.size ||
+                existing.hasCover === undefined
+
+            // Update or add to index if anything changed (size, mtime, lyric status, or cover status)
+            if (!existing || existing.size !== stats.size || existing.hasLyric !== hasLyricOnDisk || needsCoverCheck || !existing.interval || existing.quality === 'unknown' || !existing.bitrate) {
                 if (existing) {
                     existing.size = stats.size
                     existing.mtime = stats.mtimeMs
@@ -475,6 +529,15 @@ export const syncCacheIndex = async (username?: string) => {
                     if (existing.subPath !== subPath) {
                         existing.subPath = subPath
                         updated = true
+                    }
+
+                    if (needsCoverCheck) {
+                        const actualHasCover = readEmbeddedCoverState(filePath)
+                        if (existing.hasCover !== actualHasCover) updated = true
+                        existing.hasCover = actualHasCover
+                        existing.coverCheckedVersion = COVER_CHECK_VERSION
+                        existing.coverCheckedMtime = stats.mtimeMs
+                        existing.coverCheckedSize = stats.size
                     }
 
                     // If interval or quality/bitrate is missing/unknown, or hasEmbedLyric not yet detected, try to extract it
@@ -514,7 +577,7 @@ export const syncCacheIndex = async (username?: string) => {
                         if (tagger.title && !songName) songName = tagger.title
                         if (tagger.artist && !singer) singer = tagger.artist
                         if (tagger.album && !album) album = tagger.album
-                        if (tagger.pictures && tagger.pictures.length > 0) hasCover = true
+                        if (hasValidEmbeddedCover(tagger.pictures)) hasCover = true
 
                         const dur = tagger.duration
                         interval = dur ? formatPlayTime(dur / 1000) : ''
@@ -552,6 +615,9 @@ export const syncCacheIndex = async (username?: string) => {
                         hasCover: hasCover,
                         hasLyric: hasLyricOnDisk,
                         hasEmbedLyric,
+                        coverCheckedVersion: COVER_CHECK_VERSION,
+                        coverCheckedMtime: stats.mtimeMs,
+                        coverCheckedSize: stats.size,
                         bitrate: bitrate,
                         sampleRate: sampleRate,
                         bitDepth: bitDepth
@@ -596,15 +662,15 @@ export const syncCacheIndex = async (username?: string) => {
 export const getCacheList = async (username?: string) => {
     const normalizedUsername = (username && username !== '_open' && username !== 'default') ? username : '_open'
 
-    // Automatically trigger sync if index files don't exist
+    // Keep indexed metadata aligned with disk. This also repairs stale hasCover values
+    // from older indexes where the cover endpoint may already return 404.
     const cacheDir = getCacheDir(normalizedUsername, false)
     const musicDir = getCacheDir(normalizedUsername, true)
     const hasCacheIndex = fs.existsSync(path.join(cacheDir, 'cache_index.json'))
     const hasMusicIndex = fs.existsSync(path.join(musicDir, 'music_index.json'))
 
-    if (!hasCacheIndex || !hasMusicIndex) {
-        await syncCacheIndex(username)
-    }
+    if (!hasCacheIndex || !hasMusicIndex) await syncCacheIndex(username)
+    else await syncCacheIndex(normalizedUsername)
 
     const cacheItems = indexManager.getAll(normalizedUsername, 'cache')
     const musicItems = indexManager.getAll(normalizedUsername, 'music')
@@ -741,7 +807,7 @@ export const batchUpdateMetadata = async (filenames: string[], username: string 
         try {
             let imageBuffer: Buffer | undefined
             const imageUrl = item.img
-            if (imageUrl && imageUrl.startsWith('http')) {
+            if (imageUrl && imageUrl.startsWith('http') && !isPlaceholderCoverUrl(imageUrl)) {
                 const chunks: Buffer[] = []
                 const p = imageUrl.startsWith('https') ? https : http
                 imageBuffer = await new Promise<Buffer>((resolveI, rejectI) => {
@@ -764,7 +830,7 @@ export const batchUpdateMetadata = async (filenames: string[], username: string 
             if (imageBuffer && imageBuffer.length > 0) {
                 tagger.pictures = [new MetaPicture('image/jpeg', new Uint8Array(imageBuffer), 'Cover')]
                 item.hasCover = true
-            } else if (tagger.pictures && tagger.pictures.length > 0) {
+            } else if (hasValidEmbeddedCover(tagger.pictures)) {
                 item.hasCover = true
             } else {
                 item.hasCover = false
@@ -875,41 +941,46 @@ export const linkLocalFile = async (oldFilename: string, songInfo: any, username
 export const getCacheCover = (filename: string, username?: string) => {
     const normalizedUsername = (username && username !== '_open' && username !== 'default') ? username : '_open'
 
-    // Cover cache lookup
-    try {
-        const hash = crypto.createHash('md5').update(filename).digest('hex')
-        const coverCacheDir = getCoverCacheDir(normalizedUsername)
-        const binPath = path.join(coverCacheDir, `${hash}.bin`)
-        const mimePath = path.join(coverCacheDir, `${hash}.mime`)
-        
-        if (fs.existsSync(binPath) && fs.existsSync(mimePath)) {
-            const data = fs.readFileSync(binPath)
-            const mime = fs.readFileSync(mimePath, 'utf8')
-            return { data, mime }
-        }
-    } catch (e) {
-        console.error(`[Cache] Error reading cover cache for: ${filename}`, e)
-    }
-
     const roots: Array<'cache' | 'music'> = ['cache', 'music']
     for (const folder of roots) {
         const dir = getCacheDir(normalizedUsername, folder === 'music')
-        const filePath = path.join(dir, filename) // [Fix] Allow subfolders
+        const filePath = resolveCacheRelativePath(dir, filename) // [Fix] Allow subfolders safely
 
-        if (fs.existsSync(filePath)) {
+        if (filePath && fs.existsSync(filePath)) {
+            let stats: Stats | undefined
+            try {
+                stats = fs.statSync(filePath)
+                const hash = getCoverCacheHash(filename, stats)
+                const coverCacheDir = getCoverCacheDir(normalizedUsername)
+                const binPath = path.join(coverCacheDir, `${hash}.bin`)
+                const mimePath = path.join(coverCacheDir, `${hash}.mime`)
+
+                if (fs.existsSync(binPath) && fs.existsSync(mimePath)) {
+                    const data = fs.readFileSync(binPath)
+                    const mime = fs.readFileSync(mimePath, 'utf8')
+                    if (data.length > 0) return { data, mime }
+                    try {
+                        fs.unlinkSync(binPath)
+                        fs.unlinkSync(mimePath)
+                    } catch (e) { }
+                }
+            } catch (e) {
+                console.error(`[Cache] Error reading cover cache for: ${filename}`, e)
+            }
+
             try {
                 const tagger = new MusicTagger()
                 tagger.loadPath(filePath)
                 const pics = tagger.pictures
-                if (pics && pics.length > 0) {
-                    const pic = pics[0]
+                const pic = Array.isArray(pics) ? pics.find(hasValidPictureData) : null
+                if (pic) {
                     const mime = pic.mimeType || 'image/jpeg'
                     const data = Buffer.from(pic.data)
                     tagger.dispose()
 
                     // Save to cover cache
                     try {
-                        const hash = crypto.createHash('md5').update(filename).digest('hex')
+                        const hash = getCoverCacheHash(filename, stats)
                         const coverCacheDir = getCoverCacheDir(normalizedUsername)
                         const binPath = path.join(coverCacheDir, `${hash}.bin`)
                         const mimePath = path.join(coverCacheDir, `${hash}.mime`)
@@ -940,9 +1011,14 @@ export const removeCacheFile = (filename: string, username?: string) => {
 
     for (const folder of roots) {
         const dir = getCacheDir(normalizedUsername, folder === 'music')
-        const filePath = path.join(dir, path.basename(filename))
+        const filePath = resolveCacheRelativePath(dir, filename)
 
-        if (fs.existsSync(filePath)) {
+        if (filePath && fs.existsSync(filePath)) {
+            let coverCacheHash = ''
+            try {
+                coverCacheHash = getCoverCacheHash(filename, fs.statSync(filePath))
+            } catch (e) { }
+
             fs.unlinkSync(filePath)
             console.log(`[FileCache] Deleted from ${folder}: ${filename}`)
 
@@ -967,12 +1043,14 @@ export const removeCacheFile = (filename: string, username?: string) => {
 
             // [New] Delete associated cover cache if exists
             try {
-                const hash = crypto.createHash('md5').update(filename).digest('hex')
                 const coverCacheDir = getCoverCacheDir(normalizedUsername)
-                const binPath = path.join(coverCacheDir, `${hash}.bin`)
-                const mimePath = path.join(coverCacheDir, `${hash}.mime`)
-                if (fs.existsSync(binPath)) fs.unlinkSync(binPath)
-                if (fs.existsSync(mimePath)) fs.unlinkSync(mimePath)
+                const hashes = [coverCacheHash, crypto.createHash('md5').update(filename).digest('hex')].filter(Boolean)
+                for (const hash of hashes) {
+                    const binPath = path.join(coverCacheDir, `${hash}.bin`)
+                    const mimePath = path.join(coverCacheDir, `${hash}.mime`)
+                    if (fs.existsSync(binPath)) fs.unlinkSync(binPath)
+                    if (fs.existsSync(mimePath)) fs.unlinkSync(mimePath)
+                }
             } catch (e) {}
 
             deleted = true
@@ -1287,7 +1365,7 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
             try {
                 const tagger = new MusicTagger()
                 tagger.loadPath(finalPath)
-                hasCover = !!(tagger.pictures && tagger.pictures.length > 0)
+                hasCover = hasValidEmbeddedCover(tagger.pictures)
                 const lyricsInTag = tagger.lyrics
                 hasEmbedLyric = !!(lyricsInTag && lyricsInTag.trim().length > 10)
                 tagger.dispose()
@@ -1364,9 +1442,12 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
                 return
             }
 
-            cacheProgress.set(songKey, { progress: 0, status: 'downloading' })
+            cacheProgress.set(songKey, { progress: 0, status: 'downloading', total: 0, received: 0, speed: 0, updatedAt: Date.now() })
             const total = parseInt(res.headers['content-length'] || '0', 10)
             let received = 0
+            let lastSpeedAt = Date.now()
+            let lastSpeedBytes = 0
+            let currentSpeed = 0
             const contentType = res.headers['content-type'] || ''
             let headerExt = '.mp3'
             if (contentType.includes('audio/flac')) headerExt = '.flac'
@@ -1377,16 +1458,20 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
             const fileStream = fs.createWriteStream(tempPath)
             res.on('data', (chunk) => {
                 received += chunk.length
-                if (total > 0) {
-                    const progress = Math.round((received / total) * 100)
-                    cacheProgress.set(songKey, { progress, status: 'downloading', total, received })
+                const now = Date.now()
+                if (now - lastSpeedAt >= 1000) {
+                    currentSpeed = Math.max(0, (received - lastSpeedBytes) / ((now - lastSpeedAt) / 1000))
+                    lastSpeedAt = now
+                    lastSpeedBytes = received
                 }
+                const progress = total > 0 ? Math.round((received / total) * 100) : 0
+                cacheProgress.set(songKey, { progress, status: 'downloading', total, received, speed: currentSpeed, updatedAt: now })
             })
 
             res.pipe(fileStream)
             fileStream.on('close', async () => {
                 if (settled) return
-                cacheProgress.set(songKey, { progress: 100, status: 'tagging' })
+                cacheProgress.set(songKey, { progress: 100, status: 'tagging', total, received, speed: 0, updatedAt: Date.now() })
 
                 let ext = headerExt
                 if (fs.existsSync(tempPath)) {
@@ -1408,7 +1493,7 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
                     let imageBuffer: Buffer | undefined
                     try {
                         const imageUrl = songInfo.img || (songInfo.meta && songInfo.meta.picUrl)
-                        if (imageUrl && imageUrl.startsWith('http')) {
+                        if (imageUrl && imageUrl.startsWith('http') && !isPlaceholderCoverUrl(imageUrl)) {
                             const chunks: Buffer[] = []
                             const p = imageUrl.startsWith('https') ? https : http
                             imageBuffer = await new Promise((resolveI, rejectI) => {
@@ -1432,7 +1517,7 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
                         interval: metadata.interval, source: metadata.source,
                         quality: quality || 'unknown', filename: baseName + ext,
                         folder: folderType, mtime: Date.now(), size: received,
-                        ext: ext.replace('.', ''), hasCover: !!(imageBuffer), hasLyric: false
+                        ext: ext.replace('.', ''), hasCover: !!(imageBuffer && imageBuffer.length > 0), hasLyric: false
                     }, folderType)
 
                     try {
@@ -1441,7 +1526,7 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
                         tagger.title = metadata.name
                         tagger.artist = metadata.singer
                         tagger.album = metadata.album
-                        if (imageBuffer) tagger.pictures = [new MetaPicture('image/jpeg', new Uint8Array(imageBuffer), 'Cover')]
+                        if (imageBuffer && imageBuffer.length > 0) tagger.pictures = [new MetaPicture('image/jpeg', new Uint8Array(imageBuffer), 'Cover')]
                         tagger.save()
                         tagger.dispose()
                     } catch (e) { }
@@ -1471,7 +1556,7 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
                         } catch (e) { /* Lyric cache/embed failure must not fail the audio cache. */ }
                     }
 
-                    cacheProgress.set(songKey, { progress: 100, status: 'finished' })
+                    cacheProgress.set(songKey, { progress: 100, status: 'finished', total: total || received, received, speed: 0, updatedAt: Date.now() })
                     setTimeout(() => cacheProgress.delete(songKey), 30000)
                     settle(() => { resolve(); void checkAndCleanupCache(username) })
                 })
