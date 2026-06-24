@@ -726,16 +726,17 @@ function changeQualityPreference(quality) {
 
 // Tab Switching
 function switchTab(tabId) {
+    // Favorites is a sidebar group toggle, not a main content view.
+    if (tabId === 'favorites') {
+        handleFavoritesClick();
+        return;
+    }
+
     document.querySelectorAll('[id^="view-"]').forEach(el => {
         el.classList.add('hidden');
         el.classList.remove('opacity-100');
         el.classList.add('opacity-0');
     });
-    // special handling for favorites
-    if (tabId === 'favorites' && currentListData) {
-        handleFavoritesClick();
-        return;
-    }
 
     const activeView = document.getElementById(`view-${tabId}`);
     if (!activeView) return;
@@ -2583,8 +2584,8 @@ function renderResults(list) {
     updatePaginationInfo(startIndex + 1, endIndex, totalItems, currentPage, totalPages);
 
     // Init Lazy Loader
-    lazyLoadImages();
-    applyMarqueeChecks();
+    lazyLoadImages(container);
+    applyMarqueeChecks(container);
 
     // [Prefetch] 自动后台预加载逻辑
     if (currentSearchScope === 'network' && currentPage === totalPages) {
@@ -2614,10 +2615,11 @@ function createMarqueeHtml(text, className = '') {
     return `<div class="truncate dynamic-marquee min-w-0 ${className}" data-text="${text.replace(/"/g, '&quot;')}">${text}</div>`;
 }
 //滚动显示
-function applyMarqueeChecks() {
+function applyMarqueeChecks(root = document) {
     // Wait for render
     setTimeout(() => {
-        const elements = document.querySelectorAll('.dynamic-marquee.truncate');
+        const scope = root || document;
+        const elements = scope.querySelectorAll('.dynamic-marquee.truncate');
         elements.forEach(el => {
             if (el.scrollWidth > el.clientWidth) {
                 const text = el.getAttribute('data-text') || el.innerText;
@@ -2650,78 +2652,51 @@ window.addEventListener('resize', () => {
 // Lazy Loading Logic
 let imageObserver;
 
-function lazyLoadImages() {
-    // 禁用 lazyload 逻辑，直接遍历所有图片并快速加载
-    const imagesToLoad = document.querySelectorAll('img.lazy-image');
-    imagesToLoad.forEach(img => {
+function lazyLoadImages(root = document) {
+    const scope = root || document;
+    const loadImage = (img) => {
         const src = img.getAttribute('data-src');
-        if (src) {
-            if (img.src.includes('logo.svg')) {
-                img.classList.add('is-placeholder');
-            }
-            img.src = src;
-            img.onload = () => {
-                img.classList.remove('is-placeholder', 'opacity-0');
-                img.removeAttribute('data-src');
-            };
-            img.onerror = () => {
-                img.src = '/music/assets/logo.svg';
-                img.classList.add('is-placeholder');
-            };
+        if (!src) return;
+        if (img.src.includes('logo.svg')) {
+            img.classList.add('is-placeholder');
         }
-    });
+        img.src = src;
+        img.onload = () => {
+            img.classList.remove('is-placeholder', 'opacity-0');
+            img.removeAttribute('data-src');
+        };
+        img.onerror = () => {
+            img.src = '/music/assets/logo.svg';
+            img.classList.add('is-placeholder');
+        };
+    };
 
-    return; // 短路返回，保留并禁用以下原有的交集观察者懒加载逻辑
-
-    // If IntersectionObserver is supported
     if ('IntersectionObserver' in window) {
-        if (imageObserver) {
-            imageObserver.disconnect();
-        }
-
-        imageObserver = new IntersectionObserver((entries, observer) => {
+        if (!imageObserver) {
+            imageObserver = new IntersectionObserver((entries, observer) => {
             entries.forEach(entry => {
                 if (entry.isIntersecting) {
-                    const img = entry.target;
-                    const src = img.getAttribute('data-src');
-
-                    if (src) {
-                        // If we are about to switch from placeholder, ensure is-placeholder class is present
-                        if (img.src.includes('logo.svg')) {
-                            img.classList.add('is-placeholder');
-                        }
-
-                        img.src = src;
-                        img.onload = () => {
-                            img.classList.remove('is-placeholder', 'opacity-0');
-                            img.removeAttribute('data-src');
-                        };
-                        img.onerror = () => {
-                            img.src = '/music/assets/logo.svg';
-                            img.classList.add('is-placeholder');
-                        };
-                    }
-                    observer.unobserve(img);
+                    loadImage(entry.target);
+                    observer.unobserve(entry.target);
                 }
             });
         }, {
             rootMargin: '100px 0px', // Load before it comes into view
             threshold: 0.01
         });
+        }
 
-        const images = document.querySelectorAll('img.lazy-image');
+        const images = scope.querySelectorAll('img.lazy-image[data-src]');
         images.forEach(img => {
             imageObserver.observe(img);
         });
     } else {
         // Fallback for older browsers
-        const images = document.querySelectorAll('img.lazy-image');
-        images.forEach(img => {
-            const src = img.getAttribute('data-src');
-            if (src) img.src = src;
-        });
+        const images = scope.querySelectorAll('img.lazy-image[data-src]');
+        images.forEach(loadImage);
     }
 }
+window.lazyLoadImages = lazyLoadImages;
 
 // List search logic is now handled by ListSearch service
 
@@ -8641,23 +8616,6 @@ function handleListClick(listId, skipAutoUpdate = false) {
 
 function handleFavoritesClick() {
     exitListSecondaryModes();
-    toggleFavorites(); // Toggle folder dropdown in sidebar
-
-    // [New] 为全局收藏视图初始化搜索状态
-    initGlobalListSearch();
-
-    if (!currentListData) {
-        // Not logged in, switch to the guidance view directly
-        switchTab('favorites');
-        document.getElementById('page-title').innerText = "我的收藏";
-        return;
-    }
-
-    // Switch to Search View (Global Local)
-    document.querySelectorAll('[id^="view-"]').forEach(el => el.classList.add('hidden'));
-    const activeView = document.getElementById('view-search');
-    activeView.classList.remove('hidden');
-    setTimeout(() => activeView.classList.remove('opacity-0'), 10); // Simple fade
 
     // Highlight Header
     document.querySelectorAll('[id^="tab-"]').forEach(el => {
@@ -8670,47 +8628,7 @@ function handleFavoritesClick() {
         favTab.classList.remove('t-text-muted');
     }
 
-    // Always clear sub-item highlight when switching to "All Favorites"
-    document.querySelectorAll('[data-sidebar-list-id]').forEach(el => {
-        el.classList.remove('active-sub-item');
-        el.classList.add('t-text-muted');
-    });
-
-    // UI Updates
-    document.getElementById('page-title').innerText = "我的收藏 (全部)";
-    document.getElementById('search-input').value = '';
-    document.getElementById('search-input').placeholder = "搜索所有收藏...";
-    document.getElementById('search-source').classList.add('hidden');
-    document.getElementById('search-type').classList.add('hidden');
-
-    // Set Scope
-    currentSearchScope = 'local_all';
-
-    // Collect all songs from Default, Love, and User Lists
-    let allSongs = [];
-    if (currentListData) {
-        if (currentListData.defaultList) allSongs = allSongs.concat(currentListData.defaultList);
-        if (currentListData.loveList) allSongs = allSongs.concat(currentListData.loveList);
-        if (currentListData.userList) {
-            currentListData.userList.forEach(l => {
-                if (l.list) allSongs = allSongs.concat(l.list);
-            });
-        }
-    }
-
-    // Deduplicate by song ID
-    const uniqueSongs = [];
-    const seenIds = new Set();
-    allSongs.forEach(s => {
-        if (s && s.id && !seenIds.has(s.id)) {
-            seenIds.add(s.id);
-            uniqueSongs.push(s);
-        }
-    });
-
-    // Update render
-    currentPage = 1;
-    renderResults(uniqueSongs);
+    toggleFavorites();
 }
 
 async function handleCreateList() {

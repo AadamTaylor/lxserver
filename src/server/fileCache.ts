@@ -34,6 +34,8 @@ export const CACHE_ROOTS = {
 }
 
 let currentCacheLocation = CACHE_ROOTS.ROOT
+const CACHE_LIST_SYNC_TTL = 30 * 1000
+const cacheListSyncState: Map<string, { lastSync: number, pending?: Promise<void> }> = new Map()
 
 // Helper to get actual directory path
 // [Unified Enhancement] Cache Progress Tracker
@@ -654,6 +656,11 @@ export const syncCacheIndex = async (username?: string) => {
             indexManager.save(normalizedUsername, folder)
         }
     }
+
+    const syncKey = `${currentCacheLocation}:${normalizedUsername}`
+    const syncState = cacheListSyncState.get(syncKey) || { lastSync: 0 }
+    syncState.lastSync = Date.now()
+    cacheListSyncState.set(syncKey, syncState)
 }
 
 /**
@@ -669,8 +676,20 @@ export const getCacheList = async (username?: string) => {
     const hasCacheIndex = fs.existsSync(path.join(cacheDir, 'cache_index.json'))
     const hasMusicIndex = fs.existsSync(path.join(musicDir, 'music_index.json'))
 
-    if (!hasCacheIndex || !hasMusicIndex) await syncCacheIndex(username)
-    else await syncCacheIndex(normalizedUsername)
+    const syncKey = `${currentCacheLocation}:${normalizedUsername}`
+    const syncState = cacheListSyncState.get(syncKey) || { lastSync: 0 }
+    const mustSync = !hasCacheIndex || !hasMusicIndex
+    const shouldSync = mustSync || Date.now() - syncState.lastSync > CACHE_LIST_SYNC_TTL
+
+    if (shouldSync) {
+        if (!syncState.pending) {
+            syncState.pending = syncCacheIndex(normalizedUsername)
+                .then(() => { syncState.lastSync = Date.now() })
+                .finally(() => { syncState.pending = undefined })
+            cacheListSyncState.set(syncKey, syncState)
+        }
+        await syncState.pending
+    }
 
     const cacheItems = indexManager.getAll(normalizedUsername, 'cache')
     const musicItems = indexManager.getAll(normalizedUsername, 'music')

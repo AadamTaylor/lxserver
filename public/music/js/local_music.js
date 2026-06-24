@@ -6,6 +6,8 @@
 window.LocalMusicManager = {
     originalData: [],
     displayData: [],
+    currentPage: 1,
+    pageSize: 60,
     batchMode: false,
     selectedItems: new Set(),
     searchKeyword: '',
@@ -319,6 +321,7 @@ window.LocalMusicManager = {
 
     applyFilters() {
         let current = this.originalData;
+        this.currentPage = 1;
 
         // 2. Read current filter values from input
         const searchInput = document.getElementById('lm-search-input');
@@ -473,11 +476,60 @@ window.LocalMusicManager = {
         this.render();
     },
 
+    getTotalPages() {
+        return Math.max(1, Math.ceil((this.displayData.length || 0) / this.pageSize));
+    },
+
+    getPageSlice() {
+        const totalPages = this.getTotalPages();
+        if (this.currentPage > totalPages) this.currentPage = totalPages;
+        if (this.currentPage < 1) this.currentPage = 1;
+        const start = (this.currentPage - 1) * this.pageSize;
+        const end = Math.min(start + this.pageSize, this.displayData.length);
+        return {
+            start,
+            end,
+            list: this.displayData.slice(start, end),
+            totalPages
+        };
+    },
+
+    changePage(delta) {
+        const totalPages = this.getTotalPages();
+        const nextPage = Math.min(totalPages, Math.max(1, this.currentPage + delta));
+        if (nextPage === this.currentPage) return;
+        this.currentPage = nextPage;
+        this.render();
+        const container = document.getElementById('lm-list-container');
+        if (container) container.scrollTop = 0;
+    },
+
+    updatePagination() {
+        const pagination = document.getElementById('lm-pagination');
+        const info = document.getElementById('lm-page-info');
+        const prev = document.getElementById('lm-page-prev');
+        const next = document.getElementById('lm-page-next');
+        if (!pagination) return;
+
+        const total = this.displayData.length;
+        const totalPages = this.getTotalPages();
+        if (total <= this.pageSize) {
+            pagination.classList.add('hidden');
+        } else {
+            pagination.classList.remove('hidden');
+        }
+
+        if (info) info.textContent = `第 ${this.currentPage} / ${totalPages} 页 (${total} 首)`;
+        if (prev) prev.disabled = this.currentPage <= 1;
+        if (next) next.disabled = this.currentPage >= totalPages;
+    },
+
     render() {
         const container = document.getElementById('lm-list-container');
         if (!container) return;
 
         if (this.displayData.length === 0) {
+            this.updatePagination();
             container.innerHTML = `
                 <div class="text-center py-20 text-gray-500">
                     <i class="fas fa-inbox text-4xl mb-4 opacity-50"></i>
@@ -487,9 +539,12 @@ window.LocalMusicManager = {
         }
 
         const username = (window.currentListData && window.currentListData.username) || localStorage.getItem('lx_sync_user') || '_open';
+        const page = this.getPageSlice();
+        this.updatePagination();
 
         let html = '';
-        this.displayData.forEach((item, index) => {
+        page.list.forEach((item, pageIndex) => {
+            const index = page.start + pageIndex;
             const isUnindexed = item.source === 'unknown' || (item.songmid && item.songmid.includes(' - '));
             const isNoTag = (n) => !n || n === '未知歌曲' || n === '未知歌手' || n.toLowerCase() === 'unknown';
             const missingID3 = isNoTag(item.name) || isNoTag(item.singer) || isUnindexed;
@@ -506,7 +561,7 @@ window.LocalMusicManager = {
             if (item.hasCover) {
                 const authToken = (window.getUserAuthHeaders ? window.getUserAuthHeaders()['x-user-token'] : null) || localStorage.getItem('lx_user_token') || '';
                 const coverUrl = `/api/music/cache/cover?filename=${encodeURIComponent(item.filename)}&user=${encodeURIComponent(username)}${authToken ? `&token=${encodeURIComponent(authToken)}` : ''}`;
-                coverHtml = `<img src="${coverUrl}" onerror="this.src='/music/assets/logo.svg'" loading="lazy" class="w-10 h-10 md:w-12 md:h-12 rounded-lg object-cover shadow-sm flex-shrink-0 border t-border-main mr-2.5 md:mr-4 ml-0.5 md:ml-3">`;
+                coverHtml = `<img data-src="${coverUrl}" src="/music/assets/logo.svg" onerror="this.src='/music/assets/logo.svg'; this.classList.add('is-placeholder');" loading="lazy" fetchpriority="low" class="lazy-image is-placeholder w-10 h-10 md:w-12 md:h-12 rounded-lg object-cover shadow-sm flex-shrink-0 border t-border-main mr-2.5 md:mr-4 ml-0.5 md:ml-3">`;
             }
 
             const formatSize = (bytes) => {
@@ -639,6 +694,9 @@ window.LocalMusicManager = {
         });
 
         container.innerHTML = html;
+        if (typeof window.lazyLoadImages === 'function') {
+            window.lazyLoadImages(container);
+        }
     },
 
     toggleSelect(filename, checked) {
