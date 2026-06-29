@@ -2351,13 +2351,11 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
               username = verified
             }
             if (namingPattern) {
-              if (isPublic && global.lx.config['user.enablePublicRestriction']) {
-                const auth = req.headers['x-frontend-auth']
-                if (auth !== global.lx.config['frontend.password']) {
-                  res.writeHead(403, { 'Content-Type': 'application/json' })
-                  res.end(JSON.stringify({ success: false, error: 'Unauthorized to change cache naming pattern' }))
-                  return
-                }
+              const auth = req.headers['x-frontend-auth']
+              if (auth !== global.lx.config['frontend.password']) {
+                res.writeHead(403, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify({ success: false, error: 'Unauthorized to change cache naming pattern' }))
+                return
               }
               fileCache.setNamingPattern(namingPattern)
               if (global.lx.config) global.lx.config['cache.namingPattern'] = namingPattern
