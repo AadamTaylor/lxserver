@@ -3263,16 +3263,17 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                       setTimeout(() => fileCache.cacheProgress.delete(taskId), 30000)
                     }
                     let tempPath = ''
+                    let tagger: any = null
                     try {
                       const buffer = Buffer.concat(chunks)
                       if (buffer.length < 100) throw new Error('File too small, possibly invalid');
 
                       // Use filename extension for temp file so MusicTagger can identify container format
                       const ext = path.extname(filename) || '.mp3'
-                      tempPath = path.join(os.tmpdir(), `lx_tag_${Date.now()}${ext}`)
+                      tempPath = path.join(os.tmpdir(), `lx_tag_${Date.now()}_${crypto.randomBytes(8).toString('hex')}${ext}`)
                       fs.writeFileSync(tempPath, new Uint8Array(buffer))
 
-                      const tagger = new MusicTagger()
+                      tagger = new MusicTagger()
                       tagger.loadPath(tempPath)
                       if (songName) tagger.title = songName
                       if (artist) tagger.artist = artist
@@ -3322,6 +3323,7 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                       tagger.save()
                       console.log('[DownloadProxy] Metadata saved successfully for:', songName)
                       tagger.dispose()
+                      tagger = null
 
                       const tagged = fs.readFileSync(tempPath)
                       headers['Content-Length'] = tagged.length.toString()
@@ -3337,6 +3339,7 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                       }
                       finishProgress()
                     } finally {
+                      if (tagger) tagger.dispose()
                       if (tempPath) fs.unlink(tempPath, () => { })
                     }
                   })
@@ -4525,6 +4528,7 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
             'subsonic.enable': global.lx.config['subsonic.enable'] ?? true,
             'subsonic.path': global.lx.config['subsonic.path'] ?? '/rest',
             'singer.sourcePriority': (global.lx.config['singer.sourcePriority'] || ['tx', 'wy']).join(','),
+            'artist.maxFetchPages': global.lx.config['artist.maxFetchPages'] ?? 20,
             'system.allowUnsafeVM': global.lx.config['system.allowUnsafeVM'] || false,
           }
           res.writeHead(200, {
@@ -4623,6 +4627,12 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                 const priority = String(newConfig['singer.sourcePriority']).split(',').filter(s => s === 'tx' || s === 'wy') as Array<'tx' | 'wy'>
                 if (priority.length > 0) global.lx.config['singer.sourcePriority'] = priority
               }
+              if (newConfig['artist.maxFetchPages'] !== undefined) {
+                const maxPages = Number(newConfig['artist.maxFetchPages'])
+                global.lx.config['artist.maxFetchPages'] = Number.isFinite(maxPages) && maxPages > 0
+                  ? Math.min(Math.floor(maxPages), 100)
+                  : 20
+              }
 
               // 更新 WebDAVSync 配置
               if (global.lx.webdavSync && (newConfig['webdav.url'] || newConfig['webdav.username'] || newConfig['webdav.password'] || newConfig['sync.interval'])) {
@@ -4657,6 +4667,7 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                 'player.path': global.lx.config['player.path'] ?? '/music',
                 'subsonic.enable': global.lx.config['subsonic.enable'],
                 'subsonic.path': global.lx.config['subsonic.path'],
+                'artist.maxFetchPages': global.lx.config['artist.maxFetchPages'],
                 'system.allowUnsafeVM': global.lx.config['system.allowUnsafeVM'],
                 users: global.lx.config.users.map(u => ({
                   name: u.name,
