@@ -28,6 +28,52 @@ window.LocalMusicManager = {
     subPathModalMode: 'filter',  // [New] 'filter' | 'categorize'
     cacheKey: 'lx_lm_filters',   // [New] localStorage key
     enableReMapping: false,
+    listEventsBound: false,
+
+    escapeHtml(value) {
+        return String(value ?? '').replace(/[&<>"']/g, ch => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#039;'
+        })[ch]);
+    },
+
+    escapeAttr(value) {
+        return this.escapeHtml(value);
+    },
+
+    bindListEvents() {
+        if (this.listEventsBound) return;
+        const container = document.getElementById('lm-list-container');
+        if (!container) return;
+        this.listEventsBound = true;
+        container.addEventListener('click', (event) => {
+            const target = event.target.closest('[data-lm-action]');
+            if (!target || !container.contains(target)) return;
+            const index = parseInt(target.dataset.lmIndex || '', 10);
+            switch (target.dataset.lmAction) {
+                case 'play':
+                    this.playItem(index);
+                    break;
+                case 'download':
+                    this.downloadSingle(index);
+                    break;
+                case 'delete':
+                    this.deleteSingle(target.dataset.lmFilename || '');
+                    break;
+                case 'manual':
+                    this.openManualIndexModal(index);
+                    break;
+            }
+        });
+        container.addEventListener('change', (event) => {
+            const target = event.target;
+            if (!target.matches('[data-lm-action="select"]')) return;
+            this.toggleSelect(target.dataset.lmFilename || '', target.checked);
+        });
+    },
 
     saveFilters() {
         const filters = {
@@ -144,6 +190,7 @@ window.LocalMusicManager = {
         // Try reading global cache location to sync the selector.
         this.syncLocationSelector();
         this.loadFilters(); // Load cached filters
+        this.bindListEvents();
         this.fetchData();
 
         // Listen to tab switch to trigger refresh if we are on this tab
@@ -529,6 +576,7 @@ window.LocalMusicManager = {
     render() {
         const container = document.getElementById('lm-list-container');
         if (!container) return;
+        this.bindListEvents();
 
         if (this.displayData.length === 0) {
             this.updatePagination();
@@ -550,6 +598,12 @@ window.LocalMusicManager = {
         let html = '';
         page.list.forEach((item, pageIndex) => {
             const index = page.start + pageIndex;
+            const safeFilename = this.escapeAttr(item.filename || '');
+            const safeName = this.escapeHtml(item.name || '未知歌曲');
+            const safeSinger = this.escapeHtml(item.singer || '未知歌手');
+            const safeAlbum = this.escapeHtml(item.album || '--');
+            const safeSource = this.escapeHtml(item.source === 'unknown' ? '未知' : (item.source || ''));
+            const safeSubPath = this.escapeHtml(item.subPath || '');
             const isUnindexed = item.source === 'unknown' || (item.songmid && item.songmid.includes(' - '));
             const isNoTag = (n) => !n || n === '未知歌曲' || n === '未知歌手' || n.toLowerCase() === 'unknown';
             const missingID3 = isNoTag(item.name) || isNoTag(item.singer) || isUnindexed;
@@ -566,7 +620,7 @@ window.LocalMusicManager = {
             if (item.hasCover) {
                 const authToken = (window.getUserAuthHeaders ? window.getUserAuthHeaders()['x-user-token'] : null) || localStorage.getItem('lx_user_token') || '';
                 const coverUrl = `/api/music/cache/cover?filename=${encodeURIComponent(item.filename)}&user=${encodeURIComponent(username)}${authToken ? `&token=${encodeURIComponent(authToken)}` : ''}`;
-                coverHtml = `<img data-src="${coverUrl}" src="/music/assets/logo.svg" onerror="this.src='/music/assets/logo.svg'; this.classList.add('is-placeholder');" loading="lazy" fetchpriority="low" class="lazy-image is-placeholder w-10 h-10 md:w-12 md:h-12 rounded-lg object-cover shadow-sm flex-shrink-0 border t-border-main mr-2.5 md:mr-4 ml-0.5 md:ml-3">`;
+                coverHtml = `<img data-src="${this.escapeAttr(coverUrl)}" src="/music/assets/logo.svg" onerror="this.src='/music/assets/logo.svg'; this.classList.add('is-placeholder');" loading="lazy" fetchpriority="low" class="lazy-image is-placeholder w-10 h-10 md:w-12 md:h-12 rounded-lg object-cover shadow-sm flex-shrink-0 border t-border-main mr-2.5 md:mr-4 ml-0.5 md:ml-3">`;
             }
 
             const formatSize = (bytes) => {
@@ -583,13 +637,13 @@ window.LocalMusicManager = {
             const folderIcon = item.folder === 'music' ? '<i class="fas fa-download text-blue-500 mr-1" title="下载目录"></i>' : '<i class="fas fa-hdd text-emerald-500 mr-1" title="缓存目录"></i>';
 
             html += `
-            <div class="grid grid-cols-12 gap-2 md:gap-4 p-3 md:p-2 items-center rounded-xl hover:t-bg-item-hover transition-all t-border-main border-b last:border-b-0 group relative ${isSelected ? 't-bg-item-hover ring-1 ring-emerald-500/30' : ''}" data-lm-filename="${item.filename}">
+            <div class="grid grid-cols-12 gap-2 md:gap-4 p-3 md:p-2 items-center rounded-xl hover:t-bg-item-hover transition-all t-border-main border-b last:border-b-0 group relative ${isSelected ? 't-bg-item-hover ring-1 ring-emerald-500/30' : ''}" data-lm-filename="${safeFilename}">
                 <!-- # / Batch -->
                 <div class="col-span-1 text-center text-xs font-mono t-text-muted flex-shrink-0 flex items-center justify-center">
                     <div class="${this.batchMode ? 'hidden' : 'block'}">${index + 1}</div>
                     <div class="${this.batchMode ? 'block' : 'hidden'}">
                         <label class="flex items-center justify-center w-full h-full cursor-pointer">
-                            <input type="checkbox" onchange="window.LocalMusicManager.toggleSelect('${item.filename.replace(/'/g, "\\'")}', this.checked)" ${isSelected ? 'checked' : ''}
+                            <input type="checkbox" data-lm-action="select" data-lm-filename="${safeFilename}" ${isSelected ? 'checked' : ''}
                                 class="w-4 h-4 rounded border-gray-300 text-emerald-500 focus:ring-emerald-500 mx-auto cursor-pointer transition-all">
                         </label>
                     </div>
@@ -599,12 +653,12 @@ window.LocalMusicManager = {
                 <div class="col-span-8 sm:col-span-5 md:col-span-4 lg:col-span-4 flex items-center min-w-0 pr-2">
                     ${coverHtml}
                     <div class="min-w-0 flex-1 truncate">
-                        <div class="font-bold text-sm md:text-base t-text-main truncate group-hover:text-emerald-500 transition-colors cursor-pointer" onclick="window.LocalMusicManager.playItem(${index})">
-                            ${item.name || '未知歌曲'}
+                        <div class="font-bold text-sm md:text-base t-text-main truncate group-hover:text-emerald-500 transition-colors cursor-pointer" data-lm-action="play" data-lm-index="${index}">
+                            ${safeName}
                         </div>
                         <div class="text-[10px] md:text-xs t-text-muted mt-0.5 truncate flex items-center gap-1.5 flex-wrap">
-                            <span class="sm:hidden font-medium text-emerald-600/70 mr-0.5">${item.singer || '未知歌手'}</span>
-                            <span class="px-1.5 py-[1px] rounded-md border t-border-main ${qualityClass} scale-90 origin-left inline-block">${qualityName || '标准'}</span>
+                            <span class="sm:hidden font-medium text-emerald-600/70 mr-0.5">${safeSinger}</span>
+                            <span class="px-1.5 py-[1px] rounded-md border t-border-main ${qualityClass} scale-90 origin-left inline-block">${this.escapeHtml(qualityName || '标准')}</span>
                             ${item.bitrate ? `<span class="text-[10px] opacity-60 font-mono hidden sm:inline-block">${Math.round(item.bitrate)}kbps</span>` : ''}
                             ${item.sampleRate ? `<span class="text-[10px] opacity-60 font-mono hidden sm:inline-block">${(item.sampleRate / 1000).toFixed(1)}kHz</span>` : ''}
                             ${item.bitDepth && item.bitDepth > 16 ? `<span class="text-[10px] opacity-60 font-mono hidden sm:inline-block">${item.bitDepth}bit</span>` : ''}
@@ -615,10 +669,10 @@ window.LocalMusicManager = {
                         <div class="sm:hidden text-[9px] mt-1.5 flex items-center gap-1.5 flex-wrap">
                             <div class="flex items-center gap-1 px-1.5 py-0.5 bg-gray-100/80 dark:bg-gray-800/80 rounded-full t-text-muted">
                                 ${folderIcon}
-                                <span class="font-bold uppercase tracking-tighter">${item.source === 'unknown' ? '未知' : item.source}</span>
+                                <span class="font-bold uppercase tracking-tighter">${safeSource}</span>
                             </div>
                             
-                            ${item.subPath ? `<span class="t-text-muted opacity-50 truncate max-w-[60px] italic">${item.subPath}</span>` : ''}
+                            ${item.subPath ? `<span class="t-text-muted opacity-50 truncate max-w-[60px] italic">${safeSubPath}</span>` : ''}
                             
                             <div class="flex items-center gap-1">
                                 ${missingID3 ? '<span class="px-1 py-0 bg-red-50 text-red-500 border border-red-100 dark:bg-red-900/20 dark:text-red-400 dark:border-red-900/30 rounded-sm font-medium">缺标签</span>' : ''}
@@ -628,7 +682,7 @@ window.LocalMusicManager = {
                             </div>
 
                             ${(isUnindexed || this.enableReMapping) ? `
-                                <button onclick="window.LocalMusicManager.openManualIndexModal(${index})"
+                                <button data-lm-action="manual" data-lm-index="${index}"
                                         class="px-1.5 py-0.5 bg-emerald-500 text-white rounded-md font-bold shadow-sm shadow-emerald-500/20 active:scale-95 transition-all flex items-center gap-1">
                                     <i class="fas fa-link text-[8px]"></i>关联
                                 </button>
@@ -644,21 +698,21 @@ window.LocalMusicManager = {
 
                 <!-- Singer -->
                 <div class="hidden sm:block sm:col-span-4 md:col-span-3 lg:col-span-2 text-xs t-text-main truncate pr-2">
-                    ${item.singer || '未知歌手'}
+                    ${safeSinger}
                 </div>
 
                 <!-- Album -->
                 <div class="hidden lg:block lg:col-span-2 text-xs t-text-muted truncate pr-2">
-                    ${item.album || '--'}
+                    ${safeAlbum}
                 </div>
 
                 <!-- Source/Info with Metadata Status -->
                 <div class="hidden md:flex flex-col md:col-span-2 lg:col-span-1 text-xs t-text-muted pr-2">
                     <div class="flex items-center gap-1 mb-1">
                         ${folderIcon}
-                        <span class="truncate font-medium">${item.source === 'unknown' ? '未知' : item.source}</span>
+                        <span class="truncate font-medium">${safeSource}</span>
                     </div>
-                    ${item.subPath ? `<div class="text-[9px] text-emerald-500 font-mono truncate mb-1" title="${item.subPath}"><i class="far fa-folder mr-1 opacity-70"></i>${item.subPath}</div>` : ''}
+                    ${item.subPath ? `<div class="text-[9px] text-emerald-500 font-mono truncate mb-1" title="${safeSubPath}"><i class="far fa-folder mr-1 opacity-70"></i>${safeSubPath}</div>` : ''}
                     <div class="flex flex-wrap gap-1">
                         ${missingID3 ? '<span class="px-1 py-0 bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 rounded text-[9px] font-bold">缺标签</span>' : ''}
                         ${missingCover ? '<span class="px-1 py-0 bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400 rounded text-[9px] font-bold">缺封面</span>' : ''}
@@ -674,22 +728,22 @@ window.LocalMusicManager = {
                         ${formatSize(item.size)}
                     </div>
                     ${(isUnindexed || this.enableReMapping) ? `
-                        <button onclick="window.LocalMusicManager.openManualIndexModal(${index})"
+                        <button data-lm-action="manual" data-lm-index="${index}"
                                 class="hidden sm:flex w-8 h-8 md:w-7 md:h-7 items-center justify-center rounded-full bg-emerald-500 text-white hover:bg-emerald-600 transition-all shadow-sm shrink-0" title="手动关联">
                             <i class="fas fa-link text-[10px]"></i>
                         </button>
                     ` : ''}
-                    <button onclick="window.LocalMusicManager.playItem(${index})"
+                    <button data-lm-action="play" data-lm-index="${index}"
                             class="w-8 h-8 md:w-7 md:h-7 flex items-center justify-center rounded-full t-bg-main border t-border-main t-text-main hover:text-emerald-500 hover:border-emerald-300 transition-all shadow-sm shrink-0" title="播放">
                         <i class="fas fa-play text-[10px] ml-0.5"></i>
                     </button>
                     <!-- Download -->
-                    <button onclick="window.LocalMusicManager.downloadSingle(${index})"
+                    <button data-lm-action="download" data-lm-index="${index}"
                             class="w-8 h-8 md:w-7 md:h-7 flex items-center justify-center rounded-full t-bg-main border t-border-main t-text-main hover:text-blue-500 hover:border-blue-300 transition-all shadow-sm shrink-0" title="保存到设备">
                         <i class="fas fa-download text-[10px]"></i>
                     </button>
                     <!-- Deletion from single operations -->
-                    <button onclick="window.LocalMusicManager.deleteSingle('${item.filename.replace(/'/g, "\\'")}')"
+                    <button data-lm-action="delete" data-lm-filename="${safeFilename}"
                             class="w-8 h-8 md:w-7 md:h-7 flex items-center justify-center rounded-full t-bg-main border t-border-main t-text-muted hover:text-red-500 hover:border-red-300 transition-all shadow-sm shrink-0" title="删除">
                         <i class="far fa-trash-alt text-[10px]"></i>
                     </button>
@@ -715,7 +769,7 @@ window.LocalMusicManager = {
         }
 
         // Update DOM visually immediately if possible
-        const row = document.querySelector(`[data-lm-filename="${filename}"]`);
+        const row = Array.from(document.querySelectorAll('[data-lm-filename]')).find(el => el.dataset.lmFilename === filename);
         if (row) {
             if (checked) {
                 row.classList.add('t-bg-item-hover', 'ring-1', 'ring-emerald-500/30');

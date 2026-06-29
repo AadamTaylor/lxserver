@@ -3262,13 +3262,14 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                       fileCache.cacheProgress.set(taskId, { progress: 100, status: 'finished', total: total || received, received, speed: 0, updatedAt: Date.now() })
                       setTimeout(() => fileCache.cacheProgress.delete(taskId), 30000)
                     }
+                    let tempPath = ''
                     try {
                       const buffer = Buffer.concat(chunks)
                       if (buffer.length < 100) throw new Error('File too small, possibly invalid');
 
                       // Use filename extension for temp file so MusicTagger can identify container format
                       const ext = path.extname(filename) || '.mp3'
-                      const tempPath = path.join(os.tmpdir(), `lx_tag_${Date.now()}${ext}`)
+                      tempPath = path.join(os.tmpdir(), `lx_tag_${Date.now()}${ext}`)
                       fs.writeFileSync(tempPath, new Uint8Array(buffer))
 
                       const tagger = new MusicTagger()
@@ -3323,7 +3324,6 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                       tagger.dispose()
 
                       const tagged = fs.readFileSync(tempPath)
-                      fs.unlink(tempPath, () => { })
                       headers['Content-Length'] = tagged.length.toString()
                       if (!res.headersSent) {
                         res.writeHead(200, headers)
@@ -3336,6 +3336,8 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                         res.end(Buffer.concat(chunks))
                       }
                       finishProgress()
+                    } finally {
+                      if (tempPath) fs.unlink(tempPath, () => { })
                     }
                   })
                   return

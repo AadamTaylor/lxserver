@@ -613,19 +613,22 @@ class DownloadManager {
 
             // 2. Post to backend
             const headers = { 'Content-Type': 'application/json', ...(window.getUserAuthHeaders ? window.getUserAuthHeaders() : {}) };
+            const payload = {
+                songInfo: this.getSongInfoForServer(resolvedSong),
+                url: rawUrl,
+                quality,
+                enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false,
+                cacheLyric: window.settings?.enableServerLyricCache !== false,
+                embedLyric: !!(window.settings?.embedLyricToFile ?? true)
+            };
+            if (window.settings?.serverCacheNamingPattern && headers['x-frontend-auth']) {
+                payload.namingPattern = window.settings.serverCacheNamingPattern;
+            }
 
             const res = await fetch('/api/music/cache/download', {
                 method: 'POST',
                 headers,
-                body: JSON.stringify({ 
-                    songInfo: this.getSongInfoForServer(resolvedSong),
-                    url: rawUrl, 
-                    quality, 
-                    enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false,
-                    namingPattern: window.settings?.serverCacheNamingPattern || 'simple',
-                    cacheLyric: window.settings?.enableServerLyricCache !== false,
-                    embedLyric: !!(window.settings?.embedLyricToFile ?? true)
-                })
+                body: JSON.stringify(payload)
             });
 
             if (!res.ok) throw new Error('服务器拒绝缓存');
