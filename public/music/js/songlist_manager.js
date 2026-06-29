@@ -565,6 +565,8 @@ window.SongListManager = (function () {
             currentState.tagName = '全部分类';
             document.getElementById('current-tag-name').innerText = '全部分类';
             currentState.tags = [];
+            currentState.sortList = [];
+            currentState.sortId = '';
             renderSortTabs();
             await loadTags();
             loadList(1);

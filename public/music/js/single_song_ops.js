@@ -99,7 +99,7 @@ async function deleteSingleSong(songId) {
  * @param {Boolean} force 是否强制同步（忽略设置开关，用于手动点击按钮）
  */
 async function requestServerLyricCache(song, quality = null, force = false) {
-    if (!force && (typeof settings === 'undefined' || settings.enableServerLyricCache === false)) return;
+    if (!force && (typeof settings === 'undefined' || settings.enableServerLyricCache === false)) return false;
 
     console.log(`[Lyric] 尝试同步下载歌词缓存: ${song.name} (${quality || 'auto'})`);
     try {
@@ -115,16 +115,16 @@ async function requestServerLyricCache(song, quality = null, force = false) {
 
         if (!source || !songmid) {
             console.warn('[Lyric] 歌曲缺少必要字段，跳过歌词缓存同步:', song);
-            return;
+            return false;
         }
 
         // 1. 先尝试获取歌词数据
         const lyricUrl = `/api/music/lyric?source=${source}&songmid=${songmid}&name=${name}&singer=${singer}&hash=${hash}&interval=${interval}`;
         const lRes = await fetch(lyricUrl);
-        if (!lRes.ok) return;
+        if (!lRes.ok) return false;
         const lyricInfo = await lRes.json();
 
-        if (!lyricInfo || (!lyricInfo.lyric && !lyricInfo.lrc)) return;
+        if (!lyricInfo || (!lyricInfo.lyric && !lyricInfo.lrc)) return false;
 
         // 2. 将歌词推送到服务器缓存接口
         const cacheUrl = `/api/music/cache/lyric`;
@@ -148,7 +148,7 @@ async function requestServerLyricCache(song, quality = null, force = false) {
 
         const enableOnlyDownloadMode = window.settings?.enableOnlyDownloadMode || false;
 
-        await fetch(cacheUrl, {
+        const cacheRes = await fetch(cacheUrl, {
             method: 'POST',
             headers,
             body: JSON.stringify({
@@ -157,9 +157,13 @@ async function requestServerLyricCache(song, quality = null, force = false) {
                 enableOnlyDownloadMode
             })
         });
+        if (!cacheRes.ok) throw new Error('Lyric cache request failed');
         console.log(`[Lyric] 歌曲下载触发的歌词缓存同步成功: ${song.name} (仅下载模式: ${enableOnlyDownloadMode})`);
+        return true;
     } catch (e) {
         console.warn(`[Lyric] 自动同步歌词缓存失败: ${song.name}`, e);
+        if (force) throw e;
+        return false;
     }
 }
 

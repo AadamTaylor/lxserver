@@ -1475,6 +1475,7 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
             else if (contentType.includes('audio/wav')) headerExt = '.wav'
 
             const fileStream = fs.createWriteStream(tempPath)
+            let writeFinished = false
             res.on('data', (chunk) => {
                 received += chunk.length
                 const now = Date.now()
@@ -1488,8 +1489,19 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
             })
 
             res.pipe(fileStream)
+            fileStream.on('finish', () => { writeFinished = true })
             fileStream.on('close', async () => {
                 if (settled) return
+                if (!writeFinished) {
+                    fs.unlink(tempPath, () => { })
+                    fail(new Error('Download stream closed before write finished'))
+                    return
+                }
+                if (total > 0 && received < total) {
+                    fs.unlink(tempPath, () => { })
+                    fail(new Error(`Download incomplete: ${received}/${total}`))
+                    return
+                }
                 cacheProgress.set(songKey, { progress: 100, status: 'tagging', total, received, speed: 0, updatedAt: Date.now() })
 
                 let ext = headerExt
@@ -1516,10 +1528,19 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
                             const chunks: Buffer[] = []
                             const p = imageUrl.startsWith('https') ? https : http
                             imageBuffer = await new Promise((resolveI, rejectI) => {
-                                p.get(imageUrl, ires => {
+                                const imgReq = p.get(imageUrl, ires => {
+                                    if (ires.statusCode && ires.statusCode >= 400) {
+                                        ires.resume()
+                                        rejectI(new Error(`Cover status: ${ires.statusCode}`))
+                                        return
+                                    }
                                     ires.on('data', c => chunks.push(c))
                                     ires.on('end', () => resolveI(Buffer.concat(chunks)))
                                     ires.on('error', rejectI)
+                                })
+                                imgReq.on('error', rejectI)
+                                imgReq.setTimeout(10000, () => {
+                                    imgReq.destroy(new Error('Cover download timeout'))
                                 })
                             })
                         }
@@ -1583,6 +1604,9 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
             fileStream.on('error', (err) => { fs.unlink(tempPath, () => { }); fail(err) })
         })
         req.on('error', (err) => { fs.unlink(tempPath, () => { }); fail(err) })
+        req.setTimeout(30000, () => {
+            req.destroy(new Error('Download request timeout'))
+        })
     })
 }
 

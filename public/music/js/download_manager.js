@@ -50,9 +50,11 @@ class DownloadManager {
     }
 
     extractRawDownloadUrl(url) {
-        if (!url || !url.startsWith('/api/music/download')) return url;
+        if (!url) return url;
         try {
-            const proxyParams = new URLSearchParams(url.includes('?') ? url.split('?')[1] : '');
+            const parsedUrl = new URL(url, window.location.origin);
+            if (parsedUrl.origin !== window.location.origin || parsedUrl.pathname !== '/api/music/download') return url;
+            const proxyParams = parsedUrl.searchParams;
             const extracted = proxyParams.get('url');
             if (!extracted) return url;
             if (extracted.startsWith('http')) return extracted;
@@ -101,6 +103,12 @@ class DownloadManager {
         return task.id ? task.id.replace(/^server_(batch_)?/, '') : '';
     }
 
+    createTaskId(prefix = 'dl') {
+        const cryptoObj = window.crypto || window.msCrypto;
+        if (cryptoObj?.randomUUID) return `${prefix}_${cryptoObj.randomUUID()}`;
+        return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    }
+
     async waitForDownloadResolver(timeoutMs = 10000) {
         const resolver = this.getDownloadResolver();
         if (typeof resolver === 'function') return resolver;
@@ -140,8 +148,8 @@ class DownloadManager {
         task.speed = 0;
 
         if (this.shouldAutoSyncLyric(task)) {
-            window.requestServerLyricCache(task.song, task.quality).then(() => {
-                setTimeout(() => this.checkTaskLyric(task), 2000);
+            window.requestServerLyricCache(task.song, task.quality).then((synced) => {
+                if (synced) setTimeout(() => this.checkTaskLyric(task), 2000);
             });
         }
 
@@ -296,8 +304,8 @@ class DownloadManager {
 
                             // 成功完成后触发歌词同步（补充）
                             if (this.shouldAutoSyncLyric(task)) {
-                                window.requestServerLyricCache(task.song, task.quality).then(() => {
-                                    setTimeout(() => this.checkTaskLyric(task), 2000);
+                                window.requestServerLyricCache(task.song, task.quality).then((synced) => {
+                                    if (synced) setTimeout(() => this.checkTaskLyric(task), 2000);
                                 });
                             }
 
@@ -370,7 +378,8 @@ class DownloadManager {
             this.renderTask(task);
 
             try {
-                await window.requestServerLyricCache(task.song, task.quality, true); // 强制补全
+                const synced = await window.requestServerLyricCache(task.song, task.quality, true); // 强制补全
+                if (!synced) throw new Error('No lyric data available');
                 if (window.showSuccess) window.showSuccess(`已成功补全歌词: ${task.song.name}`);
                 // 再次检查
                 setTimeout(() => this.checkTaskLyric(task), 1500);
@@ -514,7 +523,7 @@ class DownloadManager {
             const existing = this.tasks.find(t => t.song.id === song.id && t.quality === quality && (t.status === 'waiting' || t.status === 'downloading'));
             if (!existing) {
                 const serverSongKey = isServerTask ? this.getServerSongKey(song, quality) : null;
-                const taskId = isServerTask ? `server_${serverSongKey}` : (song.taskId || `dl_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`);
+                const taskId = song.taskId || this.createTaskId(isServerTask ? 'server' : 'dl');
 
                 this.tasks.push({
                     id: taskId,
@@ -880,6 +889,7 @@ class DownloadManager {
                 this.renderTask(task);
                 this.saveTasks();
                 this.updateGlobalProgress();
+                this.processQueue();
             }
         } else {
             // 本地任务
@@ -970,54 +980,10 @@ class DownloadManager {
             this.tasks = this.tasks.filter(x => x.id !== t.id);
 
             if (t.isServer) {
-                // 云端任务：重新 resolve URL 并触发后端下载
+                // 云端任务：放回队列等待 processQueue 调度
                 t.status = 'waiting';
                 this.tasks.push(t);
                 this.renderTask(t);
-
-                // 异步重新触发云端下载
-                (async () => {
-                    try {
-                        const downloadResolver = await this.waitForDownloadResolver();
-                        // 尝试通过 QualityManager 将可能是显示名称的 quality 转换为原始 code
-                        let quality = t.quality;
-                        if (window.QualityManager) {
-                            // getBestQuality 能处理原始 code 和 preferred 偏好，传入 t.quality 作为偏好，让其降级匹配
-                            quality = window.QualityManager.getBestQuality(t.song, quality);
-                        }
-                        const result = await downloadResolver(t.song, quality, true);
-                        if (!result || !result.url) throw new Error('获取地址失败');
-
-                        const resolvedSong = result.songInfo || t.song;
-                        if (resolvedSong !== t.song) {
-                            t.song = resolvedSong;
-                        }
-                        t.serverSongKey = this.getServerSongKey(resolvedSong, quality);
-                        this.renderTask(t);
-
-                        // [Fix] 还原代理 URL 为原始外部 URL
-                        let rawUrl = this.extractRawDownloadUrl(result.url);
-                        if (!rawUrl.startsWith('http')) throw new Error('无法获取有效的外部下载地址');
-
-                        const headers = { 'Content-Type': 'application/json', ...(window.getUserAuthHeaders ? window.getUserAuthHeaders() : {}) };
-
-                        const res = await fetch('/api/music/cache/download', {
-                            method: 'POST',
-                            headers,
-                            body: JSON.stringify({ songInfo: this.getSongInfoForServer(resolvedSong), url: rawUrl, quality, enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false, namingPattern: window.settings?.serverCacheNamingPattern || 'simple', cacheLyric: window.settings?.enableServerLyricCache !== false, embedLyric: !!(window.settings?.embedLyricToFile ?? true) })
-                        });
-                        if (!res.ok) throw new Error('服务器拒绝缓存');
-
-                        t.status = 'downloading';
-                        this.renderTask(t);
-                        this.saveTasks();
-                    } catch (err) {
-                        console.warn('[DownloadManager] Retry cloud task failed:', t.song.name, err);
-                        t.status = 'error';
-                        t.errorMsg = err.message || '重试失败';
-                        this.renderTask(t);
-                    }
-                })();
             } else {
                 // 本地任务：放回队列等待 processQueue 调度
                 t.status = 'waiting';
@@ -1059,7 +1025,8 @@ class DownloadManager {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'x-user-name': username
+                        'x-user-name': username,
+                        ...(window.getUserAuthHeaders ? window.getUserAuthHeaders() : {})
                     },
                     body: JSON.stringify({ all: true })
                 }).catch(err => console.error('[DownloadManager] Failed to stop server tasks:', err));
@@ -1116,7 +1083,7 @@ class DownloadManager {
 
             data.forEach(t => {
                 this.tasks.push({
-                    id: t.id,
+                    id: /^[A-Za-z0-9_-]+$/.test(String(t.id || '')) ? t.id : this.createTaskId(t.isServer ? 'server' : 'dl'),
                     song: t.song,
                     isServer: t.isServer || false,
                     serverSongKey: t.serverSongKey || '',

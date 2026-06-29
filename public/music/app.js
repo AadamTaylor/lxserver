@@ -125,6 +125,20 @@ const DEFAULT_SETTINGS = {
     deduplicatePlaylistByQuality: true, // 同 ID 歌曲仅加入最高音质 (默认开启)
 };
 
+function normalizeDownloadConcurrency(value) {
+    const parsed = parseInt(value, 10);
+    if (!Number.isFinite(parsed)) return DEFAULT_SETTINGS.downloadConcurrency;
+    return Math.min(5, Math.max(1, parsed));
+}
+
+function normalizeStoredSettings(nextSettings) {
+    if (!nextSettings || typeof nextSettings !== 'object') return nextSettings;
+    if (nextSettings.downloadConcurrency !== undefined) {
+        nextSettings.downloadConcurrency = normalizeDownloadConcurrency(nextSettings.downloadConcurrency);
+    }
+    return nextSettings;
+}
+
 let settings = { ...DEFAULT_SETTINGS };
 
 // 歌词原始数据，用于设置切换时重新渲染
@@ -140,7 +154,7 @@ let currentRecoveryState = null; // 播放失败自动恢复状态管理
 try {
     const saved = localStorage.getItem('lx_settings');
     if (saved) {
-        settings = { ...settings, ...JSON.parse(saved) };
+        settings = normalizeStoredSettings({ ...settings, ...JSON.parse(saved) });
     }
 } catch (e) {
     console.error('[Settings] 加载设置失败:', e);
@@ -2612,7 +2626,8 @@ function createMarqueeHtml(text, className = '') {
     // Return a container marked for dynamic checking
     // different screens are different, so we check overflow after render
     // Added min-w-0 to prevent flex item from expanding beyond parent
-    return `<div class="truncate dynamic-marquee min-w-0 ${className}" data-text="${text.replace(/"/g, '&quot;')}">${text}</div>`;
+    const safeText = escapeHtmlText(text);
+    return `<div class="truncate dynamic-marquee min-w-0 ${className}" data-text="${safeText}">${safeText}</div>`;
 }
 //滚动显示
 function applyMarqueeChecks(root = document) {
@@ -2623,7 +2638,6 @@ function applyMarqueeChecks(root = document) {
         elements.forEach(el => {
             if (el.scrollWidth > el.clientWidth) {
                 const text = el.getAttribute('data-text') || el.innerText;
-                const gap = '<span class="mx-8"></span>'; // 增加间距
 
                 // 必须保留 overflow-hidden 以限制宽度
                 el.classList.remove('truncate');
@@ -2632,12 +2646,22 @@ function applyMarqueeChecks(root = document) {
                 // 使用 mask-image 实现边缘渐隐效果
                 const maskStyle = 'mask-image: linear-gradient(to right, transparent 0%, black 5%, black 95%, transparent 100%); -webkit-mask-image: linear-gradient(to right, transparent 0%, black 5%, black 95%, transparent 100%);';
 
-                el.innerHTML = `
-                <div class="w-full relative" style="${maskStyle}">
-                    <div class="inline-block whitespace-nowrap animate-marquee hover:pause-animation">
-                        <span>${text}</span>${gap}<span>${text}</span>${gap}
-                    </div>
-                </div>`;
+                const wrapper = document.createElement('div');
+                wrapper.className = 'w-full relative';
+                wrapper.setAttribute('style', maskStyle);
+                const track = document.createElement('div');
+                track.className = 'inline-block whitespace-nowrap animate-marquee hover:pause-animation';
+                const firstText = document.createElement('span');
+                firstText.textContent = text;
+                const firstGap = document.createElement('span');
+                firstGap.className = 'mx-8';
+                const secondText = document.createElement('span');
+                secondText.textContent = text;
+                const secondGap = document.createElement('span');
+                secondGap.className = 'mx-8';
+                track.append(firstText, firstGap, secondText, secondGap);
+                wrapper.appendChild(track);
+                el.replaceChildren(wrapper);
             }
         });
     }, 50);
@@ -2668,6 +2692,7 @@ function lazyLoadImages(root = document) {
         img.onerror = () => {
             img.src = '/music/assets/logo.svg';
             img.classList.add('is-placeholder');
+            img.removeAttribute('data-src');
         };
     };
 
@@ -2697,6 +2722,11 @@ function lazyLoadImages(root = document) {
     }
 }
 window.lazyLoadImages = lazyLoadImages;
+window.unobserveLazyImages = function (root = document) {
+    if (!imageObserver) return;
+    const scope = root || document;
+    scope.querySelectorAll('img.lazy-image').forEach(img => imageObserver.unobserve(img));
+};
 
 // List search logic is now handled by ListSearch service
 
@@ -2870,7 +2900,8 @@ async function resolveDownloadSongUrl(song, quality, isSilent = true) {
             : (preferredQuality || '320k');
 
         while (candidateQuality) {
-            const key = `${candidateSong.source || ''}_${candidateSong.id || candidateSong.songmid || ''}_${candidateQuality}`;
+            const candidateId = candidateSong.id || candidateSong.songmid || candidateSong.songId || candidateSong.hash || candidateSong.copyrightId || candidateSong.mid || candidateSong.mediaMid || `${candidateSong.name || ''}_${candidateSong.singer || ''}_${candidateSong.interval || ''}`;
+            const key = `${candidateSong.source || ''}_${candidateId}_${candidateQuality}`;
             if (tried.has(key)) break;
             tried.add(key);
 
@@ -2922,7 +2953,8 @@ function normalizeSongMatchText(value) {
 function isSingerMatch(sourceSinger, targetSinger) {
     const sourceText = normalizeSongMatchText(sourceSinger);
     const targetText = normalizeSongMatchText(targetSinger);
-    if (!sourceText || !targetText) return true;
+    if (!targetText) return true;
+    if (!sourceText) return false;
     if (sourceText.includes(targetText) || targetText.includes(sourceText)) return true;
 
     const splitSinger = value => String(value || '')
@@ -3955,7 +3987,7 @@ async function playSong(song, index, forceQuality = null, noPlay = false, isRetr
         if (currentSourceType !== 'normal') {
             const retryHandler = () => {
                 console.warn(`[Player] ${currentSourceType} link failed, retrying online...`);
-                if (currentSourceType === 'cache') localStorage.removeItem(`lx_url_${cleanSongData(playbackSong).id}_${targetQuality}`);
+                if (currentSourceType === 'cache') localStorage.removeItem(`lx_url_${cleanSongData(playbackSong).id}_${currentQuality || targetQuality}`);
                 playSong(playbackSong, index, targetQuality, noPlay, currentSourceType === 'server_cache' ? 'local_retry' : true);
             };
             audio.addEventListener('error', retryHandler, { once: true });
@@ -5167,7 +5199,7 @@ function loadSettings() {
         const saved = localStorage.getItem('lx_settings');
         if (saved) {
             const loaded = JSON.parse(saved);
-            settings = { ...settings, ...loaded };
+            settings = normalizeStoredSettings({ ...settings, ...loaded });
             console.log('[Settings] 加载设置成功:', settings);
         }
     } catch (e) {
@@ -5304,6 +5336,9 @@ document.addEventListener('keyup', (e) => {
 });
 
 async function updateSetting(key, value) {
+    if (SETTINGS_UI_MAP[key]?.normalize) {
+        value = SETTINGS_UI_MAP[key].normalize(value);
+    }
     const restrictedKeys = ['enableServerCache', 'enableServerLyricCache', 'serverCacheLocation', 'serverCacheNamingPattern', 'enableOnlyDownloadMode'];
     const isPublic = !currentListData?.username || currentListData?.username === 'default';
     const enablePublicRestriction = window.lx_config?.['user.enablePublicRestriction'];
@@ -5411,11 +5446,7 @@ const SETTINGS_UI_MAP = {
     downloadConcurrency: {
         id: 'setting-download-concurrency',
         type: 'value',
-        normalize: (v) => {
-            const parsed = parseInt(v, 10);
-            if (!Number.isFinite(parsed)) return DEFAULT_SETTINGS.downloadConcurrency;
-            return Math.min(5, Math.max(1, parsed));
-        },
+        normalize: normalizeDownloadConcurrency,
         action: (v) => {
             if (window.SystemDownloadManager) {
                 window.SystemDownloadManager.updateMaxConcurrent(v);
@@ -5571,6 +5602,10 @@ function syncSettingsUI(key = null, value = null) {
         if (!config) return;
 
         if (config.normalize) itemValue = config.normalize(itemValue);
+        if (settings[itemKey] !== itemValue) {
+            settings[itemKey] = itemValue;
+            window.settings = settings;
+        }
         const el = document.getElementById(config.id);
         if (el) {
             if (config.type === 'checkbox') el.checked = !!itemValue;
@@ -6008,7 +6043,8 @@ async function retryCacheLyric(btn, item) {
             albumName: item.album || ''
         };
 
-        await window.requestServerLyricCache(songData, item.quality, true); // 强制补齐
+        const synced = await window.requestServerLyricCache(songData, item.quality, true); // 强制补齐
+        if (!synced) throw new Error('No lyric data available');
 
         showSuccess(`已成功补齐歌词: ${item.name}`);
         // 成功后给予反馈并刷新列表
@@ -6048,7 +6084,8 @@ async function downloadAllCacheLyrics() {
                 albumName: item.album || ''
             };
             if (window.requestServerLyricCache) {
-                await window.requestServerLyricCache(songData, item.quality, true); // 强制补全
+                const synced = await window.requestServerLyricCache(songData, item.quality, true); // 强制补全
+                if (!synced) throw new Error('No lyric data available');
             }
             // 每首之间稍作停顿
             await new Promise(r => setTimeout(r, 500));
@@ -7872,7 +7909,7 @@ async function fetchSettingsFromServer() {
             const serverSettings = await res.json();
             console.log('[Settings] 从服务器加载设置成功:', serverSettings);
             // Merge settings
-            settings = { ...settings, ...serverSettings };
+            settings = normalizeStoredSettings({ ...settings, ...serverSettings });
             // Save to local
             localStorage.setItem('lx_settings', JSON.stringify(settings));
             // Update UI

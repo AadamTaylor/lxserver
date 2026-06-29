@@ -2351,6 +2351,14 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
               username = verified
             }
             if (namingPattern) {
+              if (isPublic && global.lx.config['user.enablePublicRestriction']) {
+                const auth = req.headers['x-frontend-auth']
+                if (auth !== global.lx.config['frontend.password']) {
+                  res.writeHead(403, { 'Content-Type': 'application/json' })
+                  res.end(JSON.stringify({ success: false, error: 'Unauthorized to change cache naming pattern' }))
+                  return
+                }
+              }
               fileCache.setNamingPattern(namingPattern)
               if (global.lx.config) global.lx.config['cache.namingPattern'] = namingPattern
             }
@@ -3249,6 +3257,11 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                     if (taskId) {
                       fileCache.cacheProgress.set(taskId, { progress: 100, status: 'tagging', total, received, speed: 0, updatedAt: Date.now() })
                     }
+                    const finishProgress = () => {
+                      if (!taskId) return
+                      fileCache.cacheProgress.set(taskId, { progress: 100, status: 'finished', total: total || received, received, speed: 0, updatedAt: Date.now() })
+                      setTimeout(() => fileCache.cacheProgress.delete(taskId), 30000)
+                    }
                     try {
                       const buffer = Buffer.concat(chunks)
                       if (buffer.length < 100) throw new Error('File too small, possibly invalid');
@@ -3309,11 +3322,6 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                       console.log('[DownloadProxy] Metadata saved successfully for:', songName)
                       tagger.dispose()
 
-                      if (taskId) {
-                        fileCache.cacheProgress.set(taskId, { progress: 100, status: 'finished', total: total || received, received, speed: 0, updatedAt: Date.now() })
-                        setTimeout(() => fileCache.cacheProgress.delete(taskId), 30000)
-                      }
-
                       const tagged = fs.readFileSync(tempPath)
                       fs.unlink(tempPath, () => { })
                       headers['Content-Length'] = tagged.length.toString()
@@ -3321,11 +3329,13 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                         res.writeHead(200, headers)
                         res.end(tagged)
                       }
+                      finishProgress()
                     } catch (e: any) {
                       if (!res.headersSent) {
                         res.writeHead(200, headers)
                         res.end(Buffer.concat(chunks))
                       }
+                      finishProgress()
                     }
                   })
                   return
@@ -3780,7 +3790,10 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
         }
         try {
           const PAGE_SIZE = 100
-          const MAX_PAGES = 100
+          const configuredMaxPages = Number((global.lx.config as any)?.['artist.maxFetchPages'])
+          const MAX_PAGES = Number.isFinite(configuredMaxPages) && configuredMaxPages > 0
+            ? Math.min(Math.floor(configuredMaxPages), 100)
+            : 20
           let allSongs: any[] = []
           for (let p = 1; p <= MAX_PAGES; p++) {
             const data = await musicSdk[source].extendDetail.getArtistSongs(id, p, PAGE_SIZE, order)

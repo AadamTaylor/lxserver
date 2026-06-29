@@ -513,6 +513,8 @@ window.LocalMusicManager = {
 
         const total = this.displayData.length;
         const totalPages = this.getTotalPages();
+        if (this.currentPage > totalPages) this.currentPage = totalPages;
+        if (this.currentPage < 1) this.currentPage = 1;
         if (total <= this.pageSize) {
             pagination.classList.add('hidden');
         } else {
@@ -530,6 +532,9 @@ window.LocalMusicManager = {
 
         if (this.displayData.length === 0) {
             this.updatePagination();
+            if (typeof window.unobserveLazyImages === 'function') {
+                window.unobserveLazyImages(container);
+            }
             container.innerHTML = `
                 <div class="text-center py-20 text-gray-500">
                     <i class="fas fa-inbox text-4xl mb-4 opacity-50"></i>
@@ -693,6 +698,9 @@ window.LocalMusicManager = {
             `;
         });
 
+        if (typeof window.unobserveLazyImages === 'function') {
+            window.unobserveLazyImages(container);
+        }
         container.innerHTML = html;
         if (typeof window.lazyLoadImages === 'function') {
             window.lazyLoadImages(container);
@@ -899,7 +907,11 @@ window.LocalMusicManager = {
             try {
                 // If single_song_ops exposes requestServerLyricCache
                 if (typeof window.requestServerLyricCache === 'function') {
-                    await window.requestServerLyricCache(item.songInfo, item.quality, true);
+                    const synced = await window.requestServerLyricCache(item.songInfo, item.quality, true);
+                    if (!synced) {
+                        fail++;
+                        continue;
+                    }
                     success++;
                     if (typeof showInfo === 'function') showInfo(`[${success}/${targets.length}] 成功补全: ${item.name}`);
                 } else {
