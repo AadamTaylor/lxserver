@@ -73,7 +73,7 @@ const DEFAULT_SETTINGS = {
     enableAutoProxy: true, // 自动代理
     enableCustomProxy: false, // 是否启用自定义代理
     customProxyUrl: '', // 自定义代理URL模板，使用 {url} 作为原始URL占位符
-    enableOnlyDownloadMode: false, // 仅下载模式
+    enableOnlyDownloadMode: true, // 仅下载模式
     downloadConcurrency: 3, // 缓存并发量 (1-5)
     hotSearchLimit: 20, // 热搜显示数量
     lyricFontSize: 1.25, // 歌词字体大小 (rem)
@@ -81,7 +81,7 @@ const DEFAULT_SETTINGS = {
     switchPlaylistOnSearchPlay: true, // 播放搜索歌曲时切换歌单 (默认开启)
     switchPlaylistOnSongListPlay: true, // 播放歌单/排行榜歌曲时切换歌单 (默认开启)
     autoResume: true, // 自动恢复进度 (默认开启)
-    showSidebarSongInfo: true, // 展示侧边栏封面
+    showSidebarSongInfo: false, // 展示侧边栏封面
     enableCrossfade: true, // 音频淡入淡出
     keepScreenAwake: true, // 保持屏幕唤醒设置
     enableKeyboardShortcuts: true, // 按键快捷方式 (默认开启)
@@ -117,6 +117,7 @@ const DEFAULT_SETTINGS = {
     saveAccountSettingsToFile: true, // 同步账号设置到文件 (默认开启)
     autoUpdateNetworkList: false, // 自动更新网络歌单 (默认关闭)
     networkListAutoCheckInterval: '6h', // 网络歌单自动检测间隔
+    favoriteSidebarOrder: [], // 我的收藏侧边栏子项排序
     preferServerCache: true, // 优先播放缓存歌曲 (默认开启)
     remoteSyncUrl: '', // 远程同步地址
     remoteSyncCode: '', // 远程同步连接码
@@ -8469,6 +8470,81 @@ async function handleRemoteOverwriteConnect(silent = false) {
 }
 
 
+function getFavoriteSidebarOrder() {
+    return Array.isArray(settings.favoriteSidebarOrder) ? settings.favoriteSidebarOrder : [];
+}
+
+function getOrderedFavoriteSidebarItems(items) {
+    const order = getFavoriteSidebarOrder();
+    if (!order.length) return items;
+
+    const itemMap = new Map(items.map(item => [item.id, item]));
+    const orderedItems = [];
+    order.forEach(id => {
+        const item = itemMap.get(id);
+        if (!item) return;
+        orderedItems.push(item);
+        itemMap.delete(id);
+    });
+    return [...orderedItems, ...itemMap.values()];
+}
+
+function persistFavoriteSidebarOrder(ids) {
+    settings.favoriteSidebarOrder = ids;
+    window.settings = settings;
+    try {
+        localStorage.setItem('lx_settings', JSON.stringify(settings));
+    } catch (e) {
+        console.error('[Settings] 保存收藏侧边栏排序失败:', e);
+    }
+    if (settings.saveAccountSettingsToFile) {
+        pushSettingsToServer();
+    }
+}
+
+async function persistUserListOrderFromSidebar(ids) {
+    if (!currentListData || !Array.isArray(currentListData.userList)) return;
+
+    const currentUserIds = currentListData.userList.map(list => list.id);
+    const userOrder = ids.filter(id => currentUserIds.includes(id));
+    if (userOrder.length !== currentUserIds.length) return;
+    if (userOrder.every((id, index) => id === currentUserIds[index])) return;
+
+    const listMap = new Map(currentListData.userList.map(list => [list.id, list]));
+    currentListData.userList = userOrder.map(id => listMap.get(id)).filter(Boolean);
+    try {
+        await pushDataChange();
+    } catch (e) {
+        console.error('[Playlist] 保存歌单排序失败:', e);
+        showError('保存歌单排序失败，请稍后重试');
+    }
+}
+
+function initFavoriteSidebarSortable(container) {
+    if (typeof Sortable === 'undefined' || !container) return;
+
+    try {
+        const oldSortable = Sortable.get(container);
+        if (oldSortable) oldSortable.destroy();
+    } catch (e) {
+        console.warn('[Playlist] 重置侧边栏排序失败:', e);
+    }
+
+    Sortable.create(container, {
+        animation: 150,
+        handle: '.favorite-sidebar-drag-handle',
+        ghostClass: 'opacity-50',
+        chosenClass: 'bg-emerald-50',
+        onEnd: () => {
+            const ids = Array.from(container.querySelectorAll('[data-sidebar-sort-id]'))
+                .map(el => el.getAttribute('data-sidebar-sort-id'))
+                .filter(Boolean);
+            persistFavoriteSidebarOrder(ids);
+            persistUserListOrderFromSidebar(ids);
+        }
+    });
+}
+
 function renderMyLists(data) {
     const container = document.getElementById('my-lists-container');
     container.innerHTML = '';
@@ -8481,6 +8557,7 @@ function renderMyLists(data) {
         const div = document.createElement('div');
         div.className = "px-6 py-2 text-sm t-text-muted hover:t-bg-main cursor-pointer flex items-center group transition-colors overflow-hidden";
         div.setAttribute('data-sidebar-list-id', id);
+        div.setAttribute('data-sidebar-sort-id', id);
         div.onclick = () => handleListClick(id);
 
         // Use createMarqueeHtml for list name
@@ -8505,6 +8582,9 @@ function renderMyLists(data) {
         }
 
         div.innerHTML = `
+            <span class="favorite-sidebar-drag-handle cursor-grab t-text-muted/60 hover:text-emerald-500 mr-2 flex-shrink-0 touch-none" title="拖拽排序">
+                <i class="fas fa-grip-vertical text-xs"></i>
+            </span>
             ${opsHtml}
             <i class="fas ${icon} w-5 t-text-muted group-hover:text-emerald-500 transition-colors flex-shrink-0"></i>
             ${name.length > 8 ? `<div class="ml-2 flex-1 overflow-hidden">${nameHtml}</div>` : nameHtml}
@@ -8519,34 +8599,39 @@ function renderMyLists(data) {
         const div = document.createElement('div');
         div.className = "px-6 py-2 text-sm t-text-muted hover:t-bg-main cursor-pointer flex items-center group transition-colors overflow-hidden";
         div.setAttribute('data-sidebar-list-id', id);
+        div.setAttribute('data-sidebar-sort-id', id);
         div.onclick = clickFn;
         div.innerHTML = `
+            <span class="favorite-sidebar-drag-handle cursor-grab t-text-muted/60 hover:text-emerald-500 mr-2 flex-shrink-0 touch-none" title="拖拽排序">
+                <i class="fas fa-grip-vertical text-xs"></i>
+            </span>
             <i class="fas ${icon} w-5 t-text-muted group-hover:text-emerald-500 transition-colors flex-shrink-0"></i>
             <span class="ml-2 flex-1 truncate">${name}</span>
             <span id="${countId}" class="text-xs text-gray-300 group-hover:t-text-muted mr-2 flex-shrink-0">0</span>
         `;
         return div;
     };
-    container.appendChild(createLibItem('__lib_artists__', '收藏歌手', 'fa-user', 'lib-artist-count', handleArtistLibraryClick));
-    container.appendChild(createLibItem('__lib_albums__', '收藏专辑', 'fa-compact-disc', 'lib-album-count', handleAlbumLibraryClick));
-    // 立即更新数量
-    refreshLibrarySidebarCount();
+    const sidebarItems = [
+        { id: '__lib_artists__', type: 'lib', el: createLibItem('__lib_artists__', '收藏歌手', 'fa-user', 'lib-artist-count', handleArtistLibraryClick) },
+        { id: '__lib_albums__', type: 'lib', el: createLibItem('__lib_albums__', '收藏专辑', 'fa-compact-disc', 'lib-album-count', handleAlbumLibraryClick) }
+    ];
 
-    // Default List
     if (data.defaultList) {
-        container.appendChild(createItem('default', '默认列表', 'fa-list', data.defaultList.length));
+        sidebarItems.push({ id: 'default', type: 'system', el: createItem('default', '默认列表', 'fa-list', data.defaultList.length) });
     }
-    // Love List
     if (data.loveList) {
-        container.appendChild(createItem('love', '我的收藏', 'fa-heart', data.loveList.length));
+        sidebarItems.push({ id: 'love', type: 'system', el: createItem('love', '我的收藏', 'fa-heart', data.loveList.length) });
     }
-    // User Lists
     if (data.userList) {
         data.userList.forEach(l => {
             const listLen = l.list ? l.list.length : 0;
-            container.appendChild(createItem(l, l.name, 'fa-music', listLen));
+            sidebarItems.push({ id: l.id, type: 'user', el: createItem(l, l.name, 'fa-music', listLen) });
         });
     }
+
+    getOrderedFavoriteSidebarItems(sidebarItems).forEach(item => container.appendChild(item.el));
+    refreshLibrarySidebarCount();
+    initFavoriteSidebarSortable(container);
 
     // [Resume] 处理本地列表的自动恢复跳转
     if (window._pendingResumeListId) {
