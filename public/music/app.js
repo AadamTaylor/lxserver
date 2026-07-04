@@ -7169,6 +7169,15 @@ if (favList) {
     // favList.classList.add('hidden'); // using height transition instead
 }
 
+function refreshFavoritesChildrenHeight() {
+    const list = document.getElementById('favorites-children');
+    if (!list || list.style.height === '0px' || list.style.height === '') return;
+
+    requestAnimationFrame(() => {
+        list.style.height = list.scrollHeight + 'px';
+    });
+}
+
 function toggleFavorites() {
     const list = document.getElementById('favorites-children');
     const arrow = document.getElementById('favorites-arrow');
@@ -8549,7 +8558,11 @@ function renderMyLists(data) {
     const container = document.getElementById('my-lists-container');
     container.innerHTML = '';
 
-    if (!data) return;
+    if (!data) {
+        container.innerHTML = '<div class="px-6 py-2 text-sm t-text-muted">请先在设置中登录</div>';
+        refreshFavoritesChildrenHeight();
+        return;
+    }
 
     // Helper to create list item
     const createItem = (listObj, name, icon, count) => {
@@ -8632,6 +8645,7 @@ function renderMyLists(data) {
     getOrderedFavoriteSidebarItems(sidebarItems).forEach(item => container.appendChild(item.el));
     refreshLibrarySidebarCount();
     initFavoriteSidebarSortable(container);
+    refreshFavoritesChildrenHeight();
 
     // [Resume] 处理本地列表的自动恢复跳转
     if (window._pendingResumeListId) {
