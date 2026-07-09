@@ -5,18 +5,19 @@
 
 // 音质优先级定义（从高到低）
 const QUALITY_PRIORITY = ['master', 'atmos_plus', 'atmos', 'hires', 'flac24bit', 'flac', '320k', '192k', '128k'];
+const QUALITY_ORDER_LOW_TO_HIGH = [...QUALITY_PRIORITY].reverse();
 
 // 音质显示名称
 const QUALITY_NAMES = {
-    master: 'Master',
+    master: '母带音质',
     atmos_plus: '增强空间音频',
     atmos: '空间音频',
-    hires: 'Hi-Res',
-    flac24bit: 'Hi-Res',
-    flac: 'SQ 无损',
-    '320k': 'HQ 高品质',
-    '192k': '标准',
-    '128k': '标准'
+    hires: '高解析度',
+    flac24bit: '24bit无损',
+    flac: '无损音质',
+    '320k': '高音质',
+    '192k': '标准音质',
+    '128k': '标准音质'
 };
 
 // 音质颜色（用于 UI 显示）
@@ -40,16 +41,26 @@ function getRawQualityData(songInfo) {
         {};
 }
 
+function sortQualitiesLowToHigh(qualities) {
+    return qualities.filter(Boolean).sort((a, b) => {
+        const aIndex = QUALITY_ORDER_LOW_TO_HIGH.indexOf(a);
+        const bIndex = QUALITY_ORDER_LOW_TO_HIGH.indexOf(b);
+        const aRank = aIndex === -1 ? QUALITY_ORDER_LOW_TO_HIGH.length : aIndex;
+        const bRank = bIndex === -1 ? QUALITY_ORDER_LOW_TO_HIGH.length : bIndex;
+        return aRank - bRank;
+    });
+}
+
 function getAvailableQualities(songInfo) {
     if (!songInfo) return ['128k'];
 
     const types = getRawQualityData(songInfo);
 
     if (Array.isArray(types)) {
-        return types.map(t => t.type || t).filter(Boolean);
+        return sortQualitiesLowToHigh(types.map(t => t.type || t));
     }
 
-    return Object.keys(types).filter(k => types[k]);
+    return sortQualitiesLowToHigh(Object.keys(types).filter(k => types[k]));
 }
 
 function getBestQuality(songInfo, userPreference = '320k') {
@@ -110,6 +121,7 @@ function isQualityAvailable(songInfo, quality) {
 // 导出到全局
 window.QualityManager = {
     QUALITY_PRIORITY,
+    QUALITY_ORDER_LOW_TO_HIGH,
     QUALITY_NAMES,
     QUALITY_COLORS,
     getBestQuality,

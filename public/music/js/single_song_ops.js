@@ -1,3 +1,40 @@
+function getSongQualitySize(song, quality) {
+    const maps = [
+        song?._types,
+        song?._qualitys,
+        song?.meta?._types,
+        song?.meta?._qualitys
+    ];
+    for (const map of maps) {
+        const size = map?.[quality]?.size;
+        if (size) return size;
+    }
+
+    const lists = [
+        song?.types,
+        song?.qualitys,
+        song?.meta?.types,
+        song?.meta?.qualitys
+    ];
+    for (const list of lists) {
+        if (!Array.isArray(list)) continue;
+        const size = list.find(t => (t?.type || t) === quality)?.size;
+        if (size) return size;
+    }
+
+    return null;
+}
+
+function getQualityOptionLabel(song, quality) {
+    const name = window.QualityManager ? window.QualityManager.getQualityDisplayName(quality) : quality;
+    return `${name} [${getSongQualitySize(song, quality) || '未知大小'}]`;
+}
+
+function getSelectableQualityOrder() {
+    return window.QualityManager?.QUALITY_ORDER_LOW_TO_HIGH ||
+        (window.QualityManager?.QUALITY_PRIORITY ? [...window.QualityManager.QUALITY_PRIORITY].reverse() : ['128k', '320k', 'flac', 'flac24bit']);
+}
+
 // Single song deletion
 async function deleteSingleSong(songId) {
     if (!(await showSelect('删除歌曲', '确定要删除这首歌曲吗?', { danger: true }))) {
@@ -203,11 +240,7 @@ async function downloadSong(songOrId, forceQuality = null, suppressAlerts = fals
     if (selected === '浏览器下载') {
         if (window.SystemDownloadManager) {
             const availableQualities = window.QualityManager ? window.QualityManager.getAvailableQualities(song) : ['128k'];
-            const qualityDisplayNames = availableQualities.map(q => {
-                const name = window.QualityManager ? window.QualityManager.getQualityDisplayName(q) : q;
-                const size = song._types?.[q]?.size || song.types?.find(t => t.type === q)?.size;
-                return size ? `${name} [${size}]` : name;
-            });
+            const qualityDisplayNames = availableQualities.map(q => getQualityOptionLabel(song, q));
             const selectedQualityDisplay = await showOptions('选择下载音质', `请选择对 [${song.name}] 的下载音质：`, qualityDisplayNames);
             if (!selectedQualityDisplay) return false;
 
@@ -242,11 +275,7 @@ async function downloadSong(songOrId, forceQuality = null, suppressAlerts = fals
         if (!targetQuality) {
             // 获取该歌曲实际支持的音质列表
             const availableQualities = window.QualityManager ? window.QualityManager.getAvailableQualities(song) : ['128k'];
-            const qualityDisplayNames = availableQualities.map(q => {
-                const name = window.QualityManager ? window.QualityManager.getQualityDisplayName(q) : q;
-                const size = song._types?.[q]?.size || song.types?.find(t => t.type === q)?.size;
-                return size ? `${name} [${size}]` : name;
-            });
+            const qualityDisplayNames = availableQualities.map(q => getQualityOptionLabel(song, q));
             const selectedQualityDisplay = await showOptions('选择缓存音质', `请选择对 [${song.name}] 的缓存音质：`, qualityDisplayNames);
             if (!selectedQualityDisplay) return false;
 
@@ -337,7 +366,7 @@ async function batchDownloadFromList() {
     if (selected === '浏览器下载') {
         if (window.SystemDownloadManager) {
             // 使用全局音质优先级展示可选音质
-            const availableQualities = window.QualityManager ? window.QualityManager.QUALITY_PRIORITY : ['flac24bit', 'flac', '320k', '128k'];
+            const availableQualities = getSelectableQualityOrder();
             const qualityDisplayNames = availableQualities.map(q => window.QualityManager ? window.QualityManager.getQualityDisplayName(q) : q);
             const selectedQualityDisplay = await showOptions('选择下载音质', `请选择批量下载的音质：\n下载歌曲的音质将取不超过该音质的最大音质`, qualityDisplayNames);
 
@@ -374,7 +403,7 @@ async function batchDownloadFromList() {
         }
     } else if (selected === '缓存到服务器') {
         // 使用全局音质优先级展示可选音质
-        const availableQualities = window.QualityManager ? window.QualityManager.QUALITY_PRIORITY : ['flac24bit', 'flac', '320k', '128k'];
+        const availableQualities = getSelectableQualityOrder();
         const qualityDisplayNames = availableQualities.map(q => window.QualityManager ? window.QualityManager.getQualityDisplayName(q) : q);
         const selectedQualityDisplay = await showOptions('选择全局缓存音质', `请选择批量请求服务器缓存的音质，下载歌曲的音质将取不超过该音质的最大音质`, qualityDisplayNames);
 
