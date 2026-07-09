@@ -3191,11 +3191,12 @@ async function fetchSongUrl(song, quality, isRetry = false, isSilent = false) {
     if (allowServerCache) {
         let cacheResult = await checkServerCache(cleanedSong, quality, !!isRetry);
         if (cacheResult.exists && !cacheResult.isCollision) {
-            console.log(`[Cache] Server Hit: ${cleanedSong.name} (${quality})`);
+            const actualQuality = cacheResult.quality || quality;
+            console.log(`[Cache] Server Hit: ${cleanedSong.name} (${actualQuality})`);
             let serverCacheUrl = cacheResult.url;
             // 应用代理逻辑 (以防服务器缓存返回的是原始 HTTP 链接)
             serverCacheUrl = await applyAutoProxy(serverCacheUrl, song);
-            return { url: serverCacheUrl, sourceType: 'server_cache', quality };
+            return { url: serverCacheUrl, sourceType: 'server_cache', quality: actualQuality };
         }
     }
 
