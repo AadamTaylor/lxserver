@@ -102,7 +102,7 @@ function getQualityOptionLabel(song, quality) {
 
 function getSelectableQualityOrder() {
     return window.QualityManager?.QUALITY_ORDER_LOW_TO_HIGH ||
-        (window.QualityManager?.QUALITY_PRIORITY ? [...window.QualityManager.QUALITY_PRIORITY].reverse() : ['128k', '320k', 'flac', 'flac24bit']);
+        (window.QualityManager?.QUALITY_PRIORITY ? [...window.QualityManager.QUALITY_PRIORITY].reverse() : ['128k', '320k', 'flac', 'flac24bit', 'hires', 'atmos', 'atmos_plus', 'master']);
 }
 
 // Single song deletion
