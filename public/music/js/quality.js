@@ -51,16 +51,22 @@ function sortQualitiesLowToHigh(qualities) {
     });
 }
 
+function isQualityEntryAvailable(entry) {
+    if (!entry) return false;
+    if (typeof entry === 'object') return !entry.isPlatformQuality;
+    return true;
+}
+
 function getAvailableQualities(songInfo) {
     if (!songInfo) return ['128k'];
 
     const types = getRawQualityData(songInfo);
 
     if (Array.isArray(types)) {
-        return sortQualitiesLowToHigh(types.map(t => t.type || t));
+        return sortQualitiesLowToHigh(types.filter(isQualityEntryAvailable).map(t => t.type || t));
     }
 
-    return sortQualitiesLowToHigh(Object.keys(types).filter(k => types[k]));
+    return sortQualitiesLowToHigh(Object.keys(types).filter(k => isQualityEntryAvailable(types[k])));
 }
 
 function getBestQuality(songInfo, userPreference = '320k') {

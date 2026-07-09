@@ -7,7 +7,7 @@ function getSongQualitySize(song, quality) {
     ];
     for (const map of maps) {
         const size = map?.[quality]?.size;
-        if (size) return size;
+        if (size && size !== '0 B') return size;
     }
 
     const lists = [
@@ -19,10 +19,80 @@ function getSongQualitySize(song, quality) {
     for (const list of lists) {
         if (!Array.isArray(list)) continue;
         const size = list.find(t => (t?.type || t) === quality)?.size;
-        if (size) return size;
+        if (size && size !== '0 B') return size;
     }
 
     return null;
+}
+
+const remoteQualitySizeCache = new Map();
+
+function getSongQualityCacheKey(song, quality) {
+    const meta = song?.meta || {};
+    const source = song?.source || meta.source || '';
+    const id = song?.songmid || song?.songId || song?.id || meta.songId || meta.songmid || '';
+    return `${source}:${id}:${quality}`;
+}
+
+function applySongQualitySize(song, quality, size) {
+    if (!song || !quality || !size) return;
+
+    const maps = [song._types, song._qualitys, song.meta?._types, song.meta?._qualitys];
+    maps.forEach(map => {
+        if (map?.[quality]) map[quality].size = size;
+    });
+
+    const lists = [song.types, song.qualitys, song.meta?.types, song.meta?.qualitys];
+    lists.forEach(list => {
+        if (!Array.isArray(list)) return;
+        const item = list.find(t => (t?.type || t) === quality);
+        if (item && typeof item === 'object') item.size = size;
+    });
+}
+
+async function fetchRemoteQualitySize(song, quality) {
+    const existingSize = getSongQualitySize(song, quality);
+    if (existingSize) return existingSize;
+
+    const cacheKey = getSongQualityCacheKey(song, quality);
+    if (remoteQualitySizeCache.has(cacheKey)) return remoteQualitySizeCache.get(cacheKey);
+
+    try {
+        const authHeaders = typeof getUserAuthHeaders === 'function' ? getUserAuthHeaders() : {};
+        const res = await fetch('/api/music/quality/size', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...authHeaders
+            },
+            body: JSON.stringify({ songInfo: song, quality })
+        });
+        if (!res.ok) throw new Error(await res.text());
+
+        const data = await res.json();
+        const size = data?.size || null;
+        if (size) applySongQualitySize(song, quality, size);
+        remoteQualitySizeCache.set(cacheKey, size);
+        return size;
+    } catch (e) {
+        console.warn(`[QualitySize] 获取 ${quality} 真实大小失败:`, e);
+        remoteQualitySizeCache.set(cacheKey, null);
+        return null;
+    }
+}
+
+async function buildQualityOptionLabels(song, qualities) {
+    const missingQualities = qualities.filter(q => !getSongQualitySize(song, q));
+    if (missingQualities.length > 0) {
+        window.showLoading?.('正在读取音质大小...');
+        try {
+            await Promise.all(missingQualities.map(q => fetchRemoteQualitySize(song, q)));
+        } finally {
+            window.hideLoading?.();
+        }
+    }
+
+    return qualities.map(q => getQualityOptionLabel(song, q));
 }
 
 function getQualityOptionLabel(song, quality) {
@@ -240,7 +310,7 @@ async function downloadSong(songOrId, forceQuality = null, suppressAlerts = fals
     if (selected === '浏览器下载') {
         if (window.SystemDownloadManager) {
             const availableQualities = window.QualityManager ? window.QualityManager.getAvailableQualities(song) : ['128k'];
-            const qualityDisplayNames = availableQualities.map(q => getQualityOptionLabel(song, q));
+            const qualityDisplayNames = await buildQualityOptionLabels(song, availableQualities);
             const selectedQualityDisplay = await showOptions('选择下载音质', `请选择对 [${song.name}] 的下载音质：`, qualityDisplayNames);
             if (!selectedQualityDisplay) return false;
 
@@ -275,7 +345,7 @@ async function downloadSong(songOrId, forceQuality = null, suppressAlerts = fals
         if (!targetQuality) {
             // 获取该歌曲实际支持的音质列表
             const availableQualities = window.QualityManager ? window.QualityManager.getAvailableQualities(song) : ['128k'];
-            const qualityDisplayNames = availableQualities.map(q => getQualityOptionLabel(song, q));
+            const qualityDisplayNames = await buildQualityOptionLabels(song, availableQualities);
             const selectedQualityDisplay = await showOptions('选择缓存音质', `请选择对 [${song.name}] 的缓存音质：`, qualityDisplayNames);
             if (!selectedQualityDisplay) return false;
 

@@ -11,12 +11,13 @@ const getFirstSize = (file, keys) => {
 const addQuality = (types, _types, type, rawSize, force = false) => {
   if (_types[type]) return
   if (!force && (rawSize == null || rawSize === 0 || rawSize === '0')) return
+  if (force && (rawSize == null || rawSize === 0 || rawSize === '0')) return
 
-  const size = rawSize == null || rawSize === 0 || rawSize === '0'
+  const numericSize = Number(rawSize)
+  const size = !Number.isFinite(numericSize) || numericSize <= 0
     ? null
-    : sizeFormate(Number(rawSize))
+    : sizeFormate(numericSize)
   const qualityInfo = { size }
-  if (force && size == null) qualityInfo.isPlatformQuality = true
   types.push({ type, ...qualityInfo })
   _types[type] = qualityInfo
 }

@@ -1,14 +1,17 @@
 import { sizeFormate } from '../../index'
 
+const hasQualityInfo = (info) => info != null
+
 const getSize = (info) => {
   const size = info?.size
-  return size == null || size === 0 || size === '0' ? null : sizeFormate(Number(size))
+  if (size == null || size === 0 || size === '0') return null
+  const numericSize = Number(size)
+  return !Number.isFinite(numericSize) || numericSize <= 0 ? null : sizeFormate(numericSize)
 }
 
-const addQuality = (types, _types, type, size, isPlatformQuality = false) => {
+const addQuality = (types, _types, type, size) => {
   if (_types[type]) return
   const qualityInfo = { size }
-  if (isPlatformQuality && size == null) qualityInfo.isPlatformQuality = true
   types.push({ type, ...qualityInfo })
   _types[type] = qualityInfo
 }
@@ -23,10 +26,12 @@ export const buildQualitys = (item = {}, privilege = {}) => {
   if (maxbr >= 999000 || item.sq) addQuality(types, _types, 'flac', getSize(item.sq))
 
   const hiresSize = getSize(item.hr)
-  addQuality(types, _types, 'flac24bit', hiresSize, true)
-  addQuality(types, _types, 'hires', hiresSize, true)
-  addQuality(types, _types, 'atmos', getSize(item.jyEffect || item.sky), true)
-  addQuality(types, _types, 'master', getSize(item.jm || item.jymaster), true)
+  if (hasQualityInfo(item.hr)) {
+    addQuality(types, _types, 'flac24bit', hiresSize)
+    addQuality(types, _types, 'hires', hiresSize)
+  }
+  if (hasQualityInfo(item.jyEffect || item.sky)) addQuality(types, _types, 'atmos', getSize(item.jyEffect || item.sky))
+  if (hasQualityInfo(item.jm || item.jymaster)) addQuality(types, _types, 'master', getSize(item.jm || item.jymaster))
 
   return { types, _types }
 }

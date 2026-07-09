@@ -579,6 +579,72 @@ const readBody = async (req: IncomingMessage) => await new Promise<string>((reso
   req.on('error', reject)
 })
 
+const formatBytes = (bytes: number): string => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return ''
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
+  return `${(bytes / Math.pow(1024, index)).toFixed(2)} ${units[index]}`
+}
+
+const getHeaderValue = (headers: Record<string, any>, key: string): string | undefined => {
+  const value = headers[key] ?? headers[key.toLowerCase()]
+  if (Array.isArray(value)) return value[0]
+  return value == null ? undefined : String(value)
+}
+
+const parseContentLength = (headers: Record<string, any>): number | null => {
+  const length = Number(getHeaderValue(headers, 'content-length'))
+  if (Number.isFinite(length) && length > 0) return length
+
+  const range = getHeaderValue(headers, 'content-range')
+  const total = range?.match(/\/(\d+)$/)?.[1]
+  if (total) {
+    const parsed = Number(total)
+    if (Number.isFinite(parsed) && parsed > 0) return parsed
+  }
+
+  return null
+}
+
+const getAudioRemoteSize = async (audioUrl: string): Promise<number | null> => {
+  if (!/^https?:\/\//i.test(audioUrl)) return null
+
+  const urlObj = new URL(audioUrl)
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Referer': urlObj.origin,
+  }
+  const options = {
+    follow_max: 5,
+    response_timeout: 8000,
+    read_timeout: 8000,
+    headers,
+  }
+
+  try {
+    const resp = await needle('head', audioUrl, null, options)
+    const size = parseContentLength(resp.headers || {})
+    if (size) return size
+  } catch (e: any) {
+    console.warn(`[QualitySize] HEAD failed: ${e.message}`)
+  }
+
+  try {
+    const resp = await needle('get', audioUrl, null, {
+      ...options,
+      headers: {
+        ...headers,
+        Range: 'bytes=0-0',
+      },
+    })
+    return parseContentLength(resp.headers || {})
+  } catch (e: any) {
+    console.warn(`[QualitySize] Range probe failed: ${e.message}`)
+  }
+
+  return null
+}
+
 const serveStatic = (req: IncomingMessage, res: http.ServerResponse, filePath: string) => {
   const contentType = getMime(filePath)
 
@@ -3999,6 +4065,66 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
             // [Fix] Return 500 but with specific error JSON to let frontend show detailed toast
             res.writeHead(500, { 'Content-Type': 'application/json' })
             res.end(JSON.stringify({ error: err.message, code: 500, attempts: err.attempts }))
+          }
+        })
+        return
+      }
+
+      // [新增] 音质真实大小 API
+      if (pathname === '/api/music/quality/size' && req.method === 'POST') {
+        const clientUsername = req.headers['x-user-name'] as string | undefined
+
+        let verifiedUsername = 'open'
+        if (clientUsername && clientUsername !== 'default' && clientUsername !== 'open' && clientUsername !== '_open') {
+          const verified = verifyUserAuth(req)
+          if (!verified || verified !== clientUsername) {
+            res.writeHead(401, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: false, message: 'Unauthorized' }))
+            return
+          }
+          verifiedUsername = verified
+        }
+
+        void readBody(req).then(async body => {
+          try {
+            let { songInfo, quality, enableAutoSwitchApiSource } = JSON.parse(body)
+            songInfo = normalizeSongInfo(songInfo)
+            if (!songInfo || !songInfo.source || !quality) {
+              throw new Error('Invalid quality size request')
+            }
+
+            const source = songInfo.source
+            if (!isSourceSupported(source, verifiedUsername)) {
+              throw new Error(`未找到支持 ${source} 平台的自定义源，请在设置中添加或启用相关源`)
+            }
+
+            const result = await callUserApiGetMusicUrl(
+              source,
+              songInfo,
+              quality,
+              verifiedUsername,
+              undefined,
+              enableAutoSwitchApiSource !== false
+            )
+
+            if (!result?.url) throw new Error('音源未返回下载链接')
+
+            const bytes = await getAudioRemoteSize(result.url)
+            if (!bytes) throw new Error('无法读取真实文件大小')
+
+            res.writeHead(200, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({
+              success: true,
+              quality,
+              bytes,
+              size: formatBytes(bytes),
+              type: result.type || quality,
+              sourceName: result.sourceName,
+            }))
+          } catch (err: any) {
+            console.error('[QualitySize] Error:', err.message)
+            res.writeHead(500, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: false, error: err.message, code: 500 }))
           }
         })
         return
