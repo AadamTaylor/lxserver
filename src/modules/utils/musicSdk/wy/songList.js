@@ -5,10 +5,11 @@
 
 import { weapi, linuxapi } from './utils/crypto'
 import { httpFetch } from '../../request'
-import { formatPlayTime, sizeFormate, dateFormat, formatPlayCount } from '../../index'
+import { formatPlayTime, dateFormat, formatPlayCount } from '../../index'
 import musicDetailApi from './musicDetail'
 import { eapiRequest } from './utils/index'
 import { formatSingerName } from '../utils'
+import { buildQualitys } from './quality'
 
 export default {
   _requestObj_tags: null,
@@ -127,43 +128,11 @@ export default {
     // console.log(tracks, privileges)
     const list = []
     tracks.forEach((item, index) => {
-      const types = []
-      const _types = {}
-      let size
       let privilege = privileges[index]
       if (privilege.id !== item.id) privilege = privileges.find(p => p.id === item.id)
       if (!privilege) return
 
-      if (privilege.maxBrLevel == 'hires') {
-        size = item.hr ? sizeFormate(item.hr.size) : null
-        types.push({ type: 'flac24bit', size })
-        _types.flac24bit = {
-          size,
-        }
-      }
-      switch (privilege.maxbr) {
-        case 999000:
-          size = null
-          types.push({ type: 'flac', size })
-          _types.flac = {
-            size,
-          }
-        case 320000:
-          size = item.h ? sizeFormate(item.h.size) : null
-          types.push({ type: '320k', size })
-          _types['320k'] = {
-            size,
-          }
-        case 192000:
-        case 128000:
-          size = item.l ? sizeFormate(item.l.size) : null
-          types.push({ type: '128k', size })
-          _types['128k'] = {
-            size,
-          }
-      }
-
-      types.reverse()
+      const { types, _types } = buildQualitys(item, privilege)
 
       if (item.pc) {
         list.push({

@@ -1,6 +1,7 @@
 import { httpFetch } from '../../request'
 import { weapi } from './utils/crypto'
-import { formatPlayTime, sizeFormate } from '../../index'
+import { formatPlayTime } from '../../index'
+import { buildQualitys } from './quality'
 // https://github.com/Binaryify/NeteaseCloudMusicApi/blob/master/module/song_detail.js
 
 export default {
@@ -15,43 +16,11 @@ export default {
     // console.log(songs, privileges)
     const list = []
     songs.forEach((item, index) => {
-      const types = []
-      const _types = {}
-      let size
       let privilege = privileges[index]
       if (privilege.id !== item.id) privilege = privileges.find(p => p.id === item.id)
       if (!privilege) return
 
-      if (privilege.maxBrLevel == 'hires') {
-        size = item.hr ? sizeFormate(item.hr.size) : null
-        types.push({ type: 'flac24bit', size })
-        _types.flac24bit = {
-          size,
-        }
-      }
-      switch (privilege.maxbr) {
-        case 999000:
-          size = item.sq ? sizeFormate(item.sq.size) : null
-          types.push({ type: 'flac', size })
-          _types.flac = {
-            size,
-          }
-        case 320000:
-          size = item.h ? sizeFormate(item.h.size) : null
-          types.push({ type: '320k', size })
-          _types['320k'] = {
-            size,
-          }
-        case 192000:
-        case 128000:
-          size = item.l ? sizeFormate(item.l.size) : null
-          types.push({ type: '128k', size })
-          _types['128k'] = {
-            size,
-          }
-      }
-
-      types.reverse()
+      const { types, _types } = buildQualitys(item, privilege)
 
       if (item.pc) {
         list.push({

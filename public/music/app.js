@@ -1613,30 +1613,36 @@ function getQualityTags(item) {
     let has320 = false;
     let hasFlac = false;
     let hasHiRes = false;
+    let hasAtmos = false;
     let hasMaster = false;
 
     if (Array.isArray(rawTypes)) {
+        const isConcrete = t => !(t && t.isPlatformQuality);
         has320 = rawTypes.some(t => t.type === '320k');
         hasFlac = rawTypes.some(t => t.type === 'flac');
-        hasHiRes = rawTypes.some(t => t.type === 'flac24bit');
-        hasMaster = rawTypes.some(t => t.type === 'master');
+        hasHiRes = rawTypes.some(t => (t.type === 'flac24bit' || t.type === 'hires') && isConcrete(t));
+        hasAtmos = rawTypes.some(t => (t.type === 'atmos' || t.type === 'atmos_plus') && isConcrete(t));
+        hasMaster = rawTypes.some(t => t.type === 'master' && isConcrete(t));
     } else {
         has320 = !!rawTypes['320k'];
         hasFlac = !!rawTypes['flac'];
-        hasHiRes = !!rawTypes['flac24bit'];
-        hasMaster = !!rawTypes['master'];
+        hasHiRes = !!(rawTypes['flac24bit'] && !rawTypes['flac24bit'].isPlatformQuality) || !!(rawTypes.hires && !rawTypes.hires.isPlatformQuality);
+        hasAtmos = !!(rawTypes.atmos && !rawTypes.atmos.isPlatformQuality) || !!(rawTypes.atmos_plus && !rawTypes.atmos_plus.isPlatformQuality);
+        hasMaster = !!(rawTypes.master && !rawTypes.master.isPlatformQuality);
     }
 
     // [New] 额外检查具体音质字段 (适用于本地歌曲或已确定音质的播放中歌曲)
     const q = item.quality || item.type;
     if (q) {
         if (q === 'master') hasMaster = true;
-        else if (q === 'flac24bit') hasHiRes = true;
+        else if (q === 'atmos' || q === 'atmos_plus') hasAtmos = true;
+        else if (q === 'flac24bit' || q === 'hires') hasHiRes = true;
         else if (q === 'flac') hasFlac = true;
         else if (q === '320k') has320 = true;
     }
 
     if (hasMaster) tags.push('<span class="flex-shrink-0 px-1 py-0 rounded text-[10px] t-badge-purple border border-purple-200 dark:border-purple-500/30 transition-colors">Master</span>');
+    else if (hasAtmos) tags.push('<span class="flex-shrink-0 px-1 py-0 rounded text-[10px] t-badge-blue border border-cyan-200 dark:border-cyan-500/30 transition-colors">Atmos</span>');
     else if (hasHiRes) tags.push('<span class="flex-shrink-0 px-1 py-0 rounded text-[10px] t-badge-yellow border border-yellow-200 dark:border-yellow-500/30 transition-colors">Hi-Res</span>');
     else if (hasFlac) tags.push('<span class="flex-shrink-0 px-1 py-0 rounded text-[10px] t-badge-green border border-emerald-200 dark:border-emerald-500/30 transition-colors">无损</span>');
     else if (has320) tags.push('<span class="flex-shrink-0 px-1 py-0 rounded text-[10px] t-badge-blue border border-blue-200 dark:border-blue-500/30 transition-colors">高品质</span>');
@@ -4234,7 +4240,7 @@ function updatePlaylist(list, startIndex = 0, scope = 'local_list', shouldAddToD
                 const p1 = window.QualityManager.QUALITY_PRIORITY.indexOf(existingQuality);
                 const p2 = window.QualityManager.QUALITY_PRIORITY.indexOf(qualityAttr);
 
-                // Priority index: master(0) > flac(2) > 320k(3)
+                // Priority index: smaller means better quality.
                 // Lower index is higher quality
                 if (p2 !== -1 && (p1 === -1 || p2 < p1)) {
                     deduplicated[existingIdx] = song;
@@ -5942,7 +5948,11 @@ function renderCacheList() {
         const q = (item.quality || '').toLowerCase();
         const qName = window.QualityManager?.getQualityDisplayName(q) || q.toUpperCase();
 
-        if (q === 'flac24bit' || q === 'hr') {
+        if (q === 'master') {
+            qTagHtml = `<span class="flex-shrink-0 px-1 py-0 rounded text-[10px] t-badge-purple border border-purple-200 dark:border-purple-500/30 transition-colors">${qName}</span>`;
+        } else if (q === 'atmos' || q === 'atmos_plus') {
+            qTagHtml = `<span class="flex-shrink-0 px-1 py-0 rounded text-[10px] t-badge-blue border border-cyan-200 dark:border-cyan-500/30 transition-colors">${qName}</span>`;
+        } else if (q === 'flac24bit' || q === 'hires' || q === 'hr') {
             qTagHtml = `<span class="flex-shrink-0 px-1 py-0 rounded text-[10px] t-badge-yellow border border-yellow-200 dark:border-yellow-500/30 transition-colors">${qName}</span>`;
         } else if (q === 'flac' || q === 'sq' || q === 'ape') {
             qTagHtml = `<span class="flex-shrink-0 px-1 py-0 rounded text-[10px] t-badge-green border border-emerald-200 dark:border-emerald-500/30 transition-colors">${qName}</span>`;

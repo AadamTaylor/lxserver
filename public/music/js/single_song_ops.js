@@ -336,7 +336,7 @@ async function batchDownloadFromList() {
 
     if (selected === '浏览器下载') {
         if (window.SystemDownloadManager) {
-            // 固定显示四个标准音质
+            // 使用全局音质优先级展示可选音质
             const availableQualities = window.QualityManager ? window.QualityManager.QUALITY_PRIORITY : ['flac24bit', 'flac', '320k', '128k'];
             const qualityDisplayNames = availableQualities.map(q => window.QualityManager ? window.QualityManager.getQualityDisplayName(q) : q);
             const selectedQualityDisplay = await showOptions('选择下载音质', `请选择批量下载的音质：\n下载歌曲的音质将取不超过该音质的最大音质`, qualityDisplayNames);
@@ -373,7 +373,7 @@ async function batchDownloadFromList() {
             showError('下载管理器未就绪');
         }
     } else if (selected === '缓存到服务器') {
-        // 固定显示四个标准音质
+        // 使用全局音质优先级展示可选音质
         const availableQualities = window.QualityManager ? window.QualityManager.QUALITY_PRIORITY : ['flac24bit', 'flac', '320k', '128k'];
         const qualityDisplayNames = availableQualities.map(q => window.QualityManager ? window.QualityManager.getQualityDisplayName(q) : q);
         const selectedQualityDisplay = await showOptions('选择全局缓存音质', `请选择批量请求服务器缓存的音质，下载歌曲的音质将取不超过该音质的最大音质`, qualityDisplayNames);
