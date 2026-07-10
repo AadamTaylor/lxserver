@@ -1776,6 +1776,7 @@ let currentArtistSource = 'wy';
 let currentArtistInfo = null;
 window.currentArtistId = null;
 window.currentArtistSource = 'wy';
+window.currentArtistOrder = 'hot';
 
 async function enterArtist(id, source = 'wy', order = 'hot', tab = 'songs', isBack = false) {
     const typeEl = document.getElementById('search-type');
@@ -1788,9 +1789,18 @@ async function enterArtist(id, source = 'wy', order = 'hot', tab = 'songs', isBa
         window.history.pushState({ page: 'search-detail' }, '');
     }
 
+    const previousArtistOrder = window.currentArtistOrder || 'hot';
     const isDifferentArtist = String(currentArtistId || '') !== String(id) || currentArtistSource !== source;
-    if (isDifferentArtist) {
+    const isDifferentOrder = previousArtistOrder !== order;
+    if (window.artistAlbumDownloadController && (isDifferentArtist || tab !== 'albums')) {
+        window.artistAlbumDownloadController.abort();
+    }
+    if (isDifferentArtist || (tab === 'songs' && isDifferentOrder)) {
         window.currentArtistSongsCache = null;
+        window.artistSongsPage = 1;
+        if (window.ListSearch) window.ListSearch.resetState();
+    }
+    if (isDifferentArtist) {
         window.currentArtistAlbumsCache = null;
     }
 
@@ -2029,10 +2039,18 @@ async function loadArtistSongs(id, source, order, forceFetch = false) {
         return;
     }
 
+    renderArtistSongsLoading();
+
     try {
         const res = await fetch(`${API_BASE}/artistSongs?id=${id}&source=${source}&order=${order}`);
         if (!res.ok) throw new Error('Failed to fetch songs');
         const list = await res.json();
+
+        const isCurrentRequest = String(window.currentArtistId) === String(id)
+            && window.currentArtistSource === source
+            && window.currentArtistOrder === order
+            && window.currentArtistTab === 'songs';
+        if (!isCurrentRequest) return;
 
         // [Fix] 唯一 ID
         list.forEach((item, idx) => {
@@ -2053,6 +2071,18 @@ async function loadArtistSongs(id, source, order, forceFetch = false) {
         showError(`加载歌曲失败: ${e.message}`);
         goBackToSearch();
     }
+}
+
+function renderArtistSongsLoading() {
+    const content = document.getElementById('artist-detail-content');
+    if (!content) return;
+    window.viewingPlaylist = [];
+    content.innerHTML = `
+        <div class="flex items-center justify-center py-12 t-text-muted">
+            <i class="fas fa-spinner fa-spin text-2xl text-emerald-500 mr-3"></i>
+            <span class="text-sm font-medium">正在加载歌曲...</span>
+        </div>
+    `;
 }
 
 function renderArtistSongsUI(list, page) {
@@ -2222,31 +2252,129 @@ function artistSongsNextPage() {
 window.artistSongsPrevPage = artistSongsPrevPage;
 window.artistSongsNextPage = artistSongsNextPage;
 
+const ARTIST_ALBUM_PAGE_SIZE = 50;
+const ARTIST_ALBUM_MAX_PAGES = 100;
+const ARTIST_ALBUM_SONG_CONCURRENCY = 4;
+window.artistAlbumDownloadController = null;
+
+function renderArtistAlbumsLoading(loaded = 0, total = 0) {
+    const content = document.getElementById('artist-detail-content');
+    if (!content) return;
+    const progressText = loaded > 0
+        ? '正在加载全部专辑，已读取 ' + loaded + (total > 0 ? '/' + total : '') + ' 张...'
+        : '正在加载全部专辑...';
+    const wrapper = document.createElement('div');
+    const icon = document.createElement('i');
+    const label = document.createElement('span');
+    wrapper.className = 'flex items-center justify-center py-12 t-text-muted';
+    icon.className = 'fas fa-spinner fa-spin text-2xl text-emerald-500 mr-3';
+    label.className = 'text-sm font-medium';
+    label.textContent = progressText;
+    wrapper.append(icon, label);
+    content.replaceChildren(wrapper);
+}
+
+async function fetchAllArtistAlbums(id, source, signal, onProgress) {
+    const albums = [];
+    const albumKeys = new Set();
+    let total = 0;
+
+    for (let page = 1; page <= ARTIST_ALBUM_MAX_PAGES; page++) {
+        const query = new URLSearchParams({ id: String(id), source, page: String(page) });
+        const res = await fetch(API_BASE + '/artistAlbums?' + query.toString(), { signal });
+        if (!res.ok) throw new Error('Failed to fetch artist albums page ' + page);
+
+        const data = await res.json();
+        const pageList = Array.isArray(data.list) ? data.list : [];
+        const previousCount = albums.length;
+        total = Math.max(total, Number(data.total) || 0);
+
+        pageList.forEach((album, index) => {
+            const albumId = album.id ?? album.mid;
+            const key = albumId !== undefined && albumId !== null && albumId !== ''
+                ? source + ':' + albumId
+                : source + ':page:' + page + ':index:' + index;
+            if (albumKeys.has(key)) return;
+            albumKeys.add(key);
+            albums.push({ ...album, source: album.source || source });
+        });
+
+        if (typeof onProgress === 'function') onProgress(albums.length, total);
+
+        const reachedTotal = total > 0 && albums.length >= total;
+        const pageExhausted = pageList.length < ARTIST_ALBUM_PAGE_SIZE;
+        const noNewAlbums = albums.length === previousCount;
+        if (pageList.length === 0 || reachedTotal || pageExhausted || noNewAlbums) break;
+    }
+
+    return { list: albums, total: total || albums.length };
+}
+
 
 
 async function loadArtistAlbums(id, source, forceFetch = false) {
-    if (!forceFetch && window.currentArtistAlbumsCache && window.currentArtistId === id && window.currentArtistSource === source) {
-        window.currentArtistId = id;
-        window.currentArtistSource = source;
+    if (!forceFetch && window.currentArtistAlbumsCache && String(window.currentArtistId) === String(id) && window.currentArtistSource === source) {
         renderArtistAlbumsUI(window.currentArtistAlbumsCache);
         return;
     }
 
+    renderArtistAlbumsLoading();
+
     try {
-        const res = await fetch(`${API_BASE}/artistAlbums?id=${id}&source=${source}`);
-        if (!res.ok) throw new Error('Failed to fetch albums');
-        const data = await res.json();
-        const list = data.list || [];
+        const data = await fetchAllArtistAlbums(id, source, undefined, (loaded, total) => {
+            const stillViewingArtist = String(window.currentArtistId) === String(id) && window.currentArtistSource === source;
+            if (window.currentArtistTab === 'albums' && stillViewingArtist) {
+                renderArtistAlbumsLoading(loaded, total);
+            }
+        });
+        const list = data.list;
+        const stillViewingArtist = String(window.currentArtistId) === String(id) && window.currentArtistSource === source;
+        if (!stillViewingArtist) return;
 
         window.currentArtistAlbumsCache = list;
-        window.currentArtistId = id;
-        window.currentArtistSource = source;
+        window.currentArtistAlbumsTotal = data.total;
 
-        renderArtistAlbumsUI(list);
+        if (window.currentArtistTab === 'albums') {
+            renderArtistAlbumsUI(list);
+        }
     } catch (e) {
-        showError(`加载专辑失败: ${e.message}`);
-        goBackToSearch();
+        const stillViewingArtist = String(window.currentArtistId) === String(id) && window.currentArtistSource === source;
+        if (stillViewingArtist) {
+            showError(`加载专辑失败: ${e.message}`);
+            goBackToSearch();
+        } else {
+            console.warn('[ArtistAlbums] 已离开歌手页，忽略专辑加载失败:', e);
+        }
     }
+}
+
+function renderArtistAlbumsToolbar(content, albumCount) {
+    const toolbar = document.createElement('div');
+    const count = document.createElement('span');
+    const actions = document.createElement('div');
+    const status = document.createElement('span');
+    const button = document.createElement('button');
+    const icon = document.createElement('i');
+    const label = document.createElement('span');
+
+    toolbar.className = 'flex flex-wrap items-center justify-between gap-3 px-2 pt-2 md:px-4 md:pt-4';
+    count.className = 'text-xs t-text-muted';
+    count.textContent = '共 ' + albumCount + ' 张专辑';
+    actions.className = 'flex items-center gap-2';
+    status.id = 'artist-album-download-status';
+    status.className = 'hidden text-xs t-text-muted';
+    button.id = 'artist-album-download-all-btn';
+    button.type = 'button';
+    button.className = 'inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-3 text-xs font-bold text-white shadow-sm transition-colors hover:bg-emerald-600';
+    button.title = '下载全部专辑歌曲';
+    button.addEventListener('click', downloadAllArtistAlbumSongs);
+    icon.className = 'fas fa-download';
+    label.textContent = '下载全部';
+
+    button.append(icon, label);
+    actions.append(status, button);
+    toolbar.append(count, actions);
+    content.prepend(toolbar);
 }
 
 function renderArtistAlbumsUI(list) {
@@ -2283,10 +2411,177 @@ function renderArtistAlbumsUI(list) {
         </div>
     `;
     content.innerHTML = html;
+    renderArtistAlbumsToolbar(content, list.length);
 }
 window.renderArtistAlbumsUI = renderArtistAlbumsUI;
 
+function setArtistAlbumDownloadButton(iconClass, labelText, isActive) {
+    const button = document.getElementById('artist-album-download-all-btn');
+    if (!button) return;
+
+    const icon = button.querySelector('i');
+    const label = button.querySelector('span');
+    button.className = isActive
+        ? 'inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-rose-500 px-3 text-xs font-bold text-white shadow-sm transition-colors hover:bg-rose-600'
+        : 'inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-emerald-500 px-3 text-xs font-bold text-white shadow-sm transition-colors hover:bg-emerald-600';
+    button.title = isActive ? '取消读取专辑歌曲' : '下载全部专辑歌曲';
+    if (icon) icon.className = iconClass;
+    if (label) label.textContent = labelText;
+}
+
+function updateArtistAlbumDownloadProgress(completed, total, isCancelling = false) {
+    const status = document.getElementById('artist-album-download-status');
+    if (status) {
+        status.classList.remove('hidden');
+        status.textContent = isCancelling ? '正在取消...' : '读取歌曲 ' + completed + '/' + total;
+    }
+    setArtistAlbumDownloadButton(
+        isCancelling ? 'fas fa-spinner fa-spin' : 'fas fa-times',
+        isCancelling ? '取消中' : '取消 ' + completed + '/' + total,
+        true
+    );
+}
+
+function resetArtistAlbumDownloadProgress() {
+    const status = document.getElementById('artist-album-download-status');
+    if (status) {
+        status.classList.add('hidden');
+        status.textContent = '';
+    }
+    setArtistAlbumDownloadButton('fas fa-download', '下载全部', false);
+}
+
+async function collectArtistAlbumSongs(albums, source, signal, onProgress) {
+    const results = new Array(albums.length);
+    const failedAlbums = [];
+    let cursor = 0;
+    let completed = 0;
+
+    const worker = async () => {
+        while (true) {
+            const index = cursor++;
+            if (index >= albums.length) return;
+
+            const album = albums[index];
+            try {
+                const albumId = album.id ?? album.mid;
+                const query = new URLSearchParams({ id: String(albumId), source: album.source || source });
+                const res = await fetch(API_BASE + '/albumSongs?' + query.toString(), { signal });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                results[index] = Array.isArray(data.list) ? data.list : (Array.isArray(data) ? data : []);
+            } catch (e) {
+                if (signal.aborted || e.name === 'AbortError') throw e;
+                console.error('[ArtistAlbums] 加载专辑歌曲失败:', album.name || album.id, e);
+                results[index] = [];
+                failedAlbums.push(album);
+            } finally {
+                completed++;
+                if (typeof onProgress === 'function') onProgress(completed, albums.length);
+            }
+        }
+    };
+
+    const workerCount = Math.min(ARTIST_ALBUM_SONG_CONCURRENCY, albums.length);
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+    const songs = [];
+    const songKeys = new Set();
+    results.forEach((albumSongs, albumIndex) => {
+        (albumSongs || []).forEach((song, songIndex) => {
+            const songId = song.id ?? song.songmid ?? song.mid ?? song.meta?.songId ?? song.meta?.songmid;
+            const key = songId !== undefined && songId !== null && songId !== ''
+                ? (song.source || source) + ':' + songId
+                : source + ':album:' + (albums[albumIndex].id ?? albums[albumIndex].mid) + ':index:' + songIndex;
+            if (songKeys.has(key)) return;
+            songKeys.add(key);
+            songs.push(song);
+        });
+    });
+
+    return { songs, failedAlbums };
+}
+
+async function downloadAllArtistAlbumSongs() {
+    if (window.artistAlbumDownloadController) {
+        const activeController = window.artistAlbumDownloadController;
+        updateArtistAlbumDownloadProgress(activeController.completed || 0, activeController.total || 0, true);
+        activeController.abort();
+        return;
+    }
+
+    const albums = Array.isArray(window.currentArtistAlbumsCache) ? window.currentArtistAlbumsCache : [];
+    if (albums.length === 0) {
+        showError('当前歌手没有可下载的专辑');
+        return;
+    }
+    if (typeof window.batchDownloadSongs !== 'function') {
+        showError('批量下载功能未就绪');
+        return;
+    }
+
+    const confirmed = await showSelect(
+        '下载全部专辑歌曲',
+        '将读取该歌手全部 ' + albums.length + ' 张专辑的歌曲，重复歌曲会按歌曲 ID 自动去重。是否继续？'
+    );
+    if (!confirmed) return;
+
+    const controller = new AbortController();
+    controller.completed = 0;
+    controller.total = albums.length;
+    window.artistAlbumDownloadController = controller;
+    updateArtistAlbumDownloadProgress(0, albums.length);
+
+    try {
+        const result = await collectArtistAlbumSongs(
+            albums,
+            window.currentArtistSource || 'wy',
+            controller.signal,
+            (completed, total) => {
+                if (window.artistAlbumDownloadController !== controller) return;
+                controller.completed = completed;
+                updateArtistAlbumDownloadProgress(completed, total, controller.signal.aborted);
+            }
+        );
+
+        if (controller.signal.aborted) return;
+
+        window.artistAlbumDownloadController = null;
+        resetArtistAlbumDownloadProgress();
+
+        if (result.songs.length === 0) {
+            showError('未能从这些专辑中读取到可下载歌曲');
+            return;
+        }
+
+        const succeededAlbums = albums.length - result.failedAlbums.length;
+        const failureText = result.failedAlbums.length > 0
+            ? '，' + result.failedAlbums.length + ' 张专辑读取失败'
+            : '';
+        await window.batchDownloadSongs(result.songs, {
+            clearSelection: false,
+            selectionLabel: '从 ' + succeededAlbums + ' 张专辑读取到 ' + result.songs.length + ' 首去重歌曲' + failureText
+        });
+    } catch (e) {
+        if (controller.signal.aborted || e.name === 'AbortError') {
+            showInfo('已取消读取全部专辑歌曲');
+        } else {
+            console.error('[ArtistAlbums] 批量读取歌曲失败:', e);
+            showError('读取全部专辑歌曲失败: ' + e.message);
+        }
+    } finally {
+        if (window.artistAlbumDownloadController === controller) {
+            window.artistAlbumDownloadController = null;
+            resetArtistAlbumDownloadProgress();
+        }
+    }
+}
+window.downloadAllArtistAlbumSongs = downloadAllArtistAlbumSongs;
+
 async function enterAlbum(id, source = 'wy') {
+    if (window.artistAlbumDownloadController) {
+        window.artistAlbumDownloadController.abort();
+    }
     // 保存进入专辑前的上下文，如果是从歌手页进入，则记录歌手 ID
     const artistHeader = document.getElementById('artist-detail-header');
     if (artistHeader) {
