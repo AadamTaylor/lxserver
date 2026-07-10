@@ -91,6 +91,17 @@ class DownloadManager {
         return id;
     }
 
+    getSongIdentity(songInfo) {
+        const meta = songInfo?.meta || {};
+        const source = songInfo?.source || meta.source || 'unknown';
+        const id = songInfo?.songmid || songInfo?.songId || meta.songmid || meta.songId ||
+            songInfo?.id || songInfo?.hash || songInfo?.copyrightId || songInfo?.mid ||
+            songInfo?.mediaMid || songInfo?.strMediaMid;
+        if (id !== undefined && id !== null && id !== '') return `${source}:${id}`;
+
+        return `${source}:${songInfo?.name || ''}:${songInfo?.singer || ''}:${songInfo?.albumName || ''}:${songInfo?.interval || ''}`;
+    }
+
     getServerSongKey(songInfo, quality) {
         return `${this.normalizeServerSongId(songInfo)}_${quality || 'unknown'}`;
     }
@@ -501,7 +512,7 @@ class DownloadManager {
         // Keep large batches responsive by limiting concurrent preflight requests.
         const results = await this.mapWithConcurrency(songs, 8, async (song) => {
             const targetPref = song.quality || window.settings?.preferredQuality || '320k';
-            const quality = window.QualityManager ? window.QualityManager.getBestQuality(song, targetPref) : targetPref;
+            const quality = song.quality || (window.QualityManager ? window.QualityManager.getBestQuality(song, targetPref) : targetPref);
             const cacheResult = await checkServerCache(song, quality, true);
             return { song, quality, cacheResult };
         });
@@ -520,7 +531,12 @@ class DownloadManager {
             }
 
             // Check if already in queue (with same quality)
-            const existing = this.tasks.find(t => t.song.id === song.id && t.quality === quality && (t.status === 'waiting' || t.status === 'downloading'));
+            const songIdentity = this.getSongIdentity(song);
+            const existing = this.tasks.find(t =>
+                this.getSongIdentity(t.song) === songIdentity &&
+                t.quality === quality &&
+                (t.status === 'waiting' || t.status === 'starting' || t.status === 'downloading' || t.status === 'tagging')
+            );
             if (!existing) {
                 const serverSongKey = isServerTask ? this.getServerSongKey(song, quality) : null;
                 const taskId = song.taskId || this.createTaskId(isServerTask ? 'server' : 'dl');
@@ -595,17 +611,19 @@ class DownloadManager {
             const downloadResolver = await this.waitForDownloadResolver();
 
             // 1. Resolve URL
-            const quality = task.quality || (window.QualityManager ? window.QualityManager.getBestQuality(task.song, window.settings?.preferredQuality || '320k') : '320k');
-            task.quality = quality;
+            const requestedQuality = task.quality || (window.QualityManager ? window.QualityManager.getBestQuality(task.song, window.settings?.preferredQuality || '320k') : '320k');
+            task.quality = requestedQuality;
 
-            const result = await downloadResolver(task.song, quality, true);
+            const result = await downloadResolver(task.song, requestedQuality, true);
             if (!result || !result.url) throw new Error('解析失败');
 
             const resolvedSong = result.songInfo || task.song;
+            const resolvedQuality = result.quality || result.type || requestedQuality;
             if (resolvedSong !== task.song) {
                 task.song = resolvedSong;
             }
-            task.serverSongKey = this.getServerSongKey(resolvedSong, quality);
+            task.quality = resolvedQuality;
+            task.serverSongKey = this.getServerSongKey(resolvedSong, resolvedQuality);
             this.renderTask(task);
 
             let rawUrl = this.extractRawDownloadUrl(result.url);
@@ -616,7 +634,7 @@ class DownloadManager {
             const payload = {
                 songInfo: this.getSongInfoForServer(resolvedSong),
                 url: rawUrl,
-                quality,
+                quality: resolvedQuality,
                 enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false,
                 cacheLyric: window.settings?.enableServerLyricCache !== false,
                 embedLyric: !!(window.settings?.embedLyricToFile ?? true)
@@ -686,13 +704,15 @@ class DownloadManager {
                 if (!resolveData || !resolveData.url) throw new Error('No download URL found');
 
                 const resolvedSong = resolveData.songInfo || task.song;
+                const resolvedQuality = resolveData.quality || resolveData.type || quality;
                 if (resolvedSong !== task.song) {
                     task.song = resolvedSong;
-                    this.renderTask(task);
                 }
+                task.quality = resolvedQuality;
+                this.renderTask(task);
 
                 finalUrl = resolveData.url;
-                ext = resolveData.quality || resolveData.type || 'mp3';
+                ext = resolvedQuality || 'mp3';
                 if (ext.startsWith('flac')) ext = 'flac'; // Handle flac24bit -> flac
                 if (ext === '128k' || ext === '320k') ext = 'mp3';
             }

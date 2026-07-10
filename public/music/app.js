@@ -3197,9 +3197,12 @@ async function resolveDownloadSongUrl(song, quality, isSilent = true) {
     let lastError = null;
 
     const tryResolveCandidate = async (candidateSong, preferredQuality) => {
-        let candidateQuality = window.QualityManager
-            ? window.QualityManager.getBestQuality(candidateSong, preferredQuality || settings.preferredQuality || '320k')
-            : (preferredQuality || '320k');
+        const requestedQuality = preferredQuality || settings.preferredQuality || '320k';
+        let candidateQuality = window.QualityManager?.QUALITY_PRIORITY?.includes(requestedQuality)
+            ? requestedQuality
+            : (window.QualityManager
+                ? window.QualityManager.getBestQuality(candidateSong, requestedQuality)
+                : requestedQuality);
 
         while (candidateQuality) {
             const candidateId = candidateSong.id || candidateSong.songmid || candidateSong.songId || candidateSong.hash || candidateSong.copyrightId || candidateSong.mid || candidateSong.mediaMid || `${candidateSong.name || ''}_${candidateSong.singer || ''}_${candidateSong.interval || ''}`;

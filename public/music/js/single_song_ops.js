@@ -412,20 +412,16 @@ async function batchDownloadSongs(songsToDownload, batchOptions = {}) {
             // 使用全局音质优先级展示可选音质
             const availableQualities = getSelectableQualityOrder();
             const qualityDisplayNames = availableQualities.map(q => window.QualityManager ? window.QualityManager.getQualityDisplayName(q) : q);
-            const selectedQualityDisplay = await showOptions('选择下载音质', `请选择批量下载的音质：\n下载歌曲的音质将取不超过该音质的最大音质`, qualityDisplayNames);
+            const selectedQualityDisplay = await showOptions('选择下载音质', `请选择批量下载的音质：\n将优先请求所选音质，解析失败时按自动降级设置处理`, qualityDisplayNames);
 
             if (!selectedQualityDisplay) return false;
             const selectedQualityIndex = qualityDisplayNames.indexOf(selectedQualityDisplay);
             const targetQuality = availableQualities[selectedQualityIndex];
 
-            const tasks = songsToDownload.map(s => {
-                // 计算该歌曲实际支持的最高音质（不超过用户选中的目标音质）
-                const actualQuality = window.QualityManager ? window.QualityManager.getBestQuality(s, targetQuality) : targetQuality;
-                return {
-                    ...s,
-                    quality: actualQuality
-                };
-            });
+            const tasks = songsToDownload.map(s => ({
+                ...s,
+                quality: targetQuality
+            }));
 
             await window.SystemDownloadManager.addTasks(tasks);
 
