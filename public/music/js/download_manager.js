@@ -18,6 +18,7 @@ class DownloadManager {
         this.estimatedTaskHeight = 92;
         this.renderedRange = { start: 0, end: 0 };
         this.scrollRenderRaf = null;
+        this.serverPollInFlight = false;
 
         // Speed calculation
         this.lastTotalBytes = 0;
@@ -63,6 +64,37 @@ class DownloadManager {
         } catch (e) {
             return url;
         }
+    }
+
+    shouldUseNativeDownload(batchSize, quality) {
+        const memoryHeavyQualities = ['flac', 'flac24bit', 'hires', 'atmos', 'atmos_plus', 'master'];
+        return batchSize > 1 || memoryHeavyQualities.includes(quality);
+    }
+
+    triggerNativeDownload(url, filename) {
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        link.rel = 'noopener';
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+    }
+
+    getDownloadExtension(url, quality) {
+        try {
+            const pathname = new URL(url, window.location.origin).pathname;
+            const match = pathname.match(/\.([a-z0-9]{2,5})$/i);
+            if (match && ['mp3', 'flac', 'm4a', 'ogg', 'wav', 'ape'].includes(match[1].toLowerCase())) {
+                return match[1].toLowerCase();
+            }
+        } catch (e) { }
+
+        if (quality === '128k' || quality === '192k' || quality === '320k') return 'mp3';
+        if (quality === 'atmos' || quality === 'atmos_plus') return 'm4a';
+        if (['flac', 'flac24bit', 'hires', 'master'].includes(quality)) return 'flac';
+        return 'mp3';
     }
 
     // Update max concurrency limit dynamically
@@ -197,9 +229,12 @@ class DownloadManager {
     }
 
     async pollServerProgress() {
+        if (this.serverPollInFlight) return;
+        this.serverPollInFlight = true;
+        try {
         // [Move to top] 对已完成但还未检测过歌词的云端任务，执行检测
         // 这样即使当前没有正在下载的任务，刷新页面后也能触发一次歌词状态刷新
-        this.tasks.filter(t => t.isServer && t.status === 'finished' && t.hasLyric === undefined).forEach(t => {
+        this.tasks.filter(t => t.isServer && t.status === 'finished' && t.hasLyric === undefined).slice(0, 3).forEach(t => {
             t.hasLyric = 'checking';
             this.checkTaskLyric(t);
         });
@@ -326,11 +361,24 @@ class DownloadManager {
                         } else if (task.isServer) {
                             task.missingProgressCount = (task.missingProgressCount || 0) + 1;
                             this.refreshMissingServerTask(task);
+                        } else if (task.nativeDownloadDispatched) {
+                            task.missingProgressCount = (task.missingProgressCount || 0) + 1;
+                            if (task.missingProgressCount >= 6) {
+                                task.status = 'error';
+                                task.speed = 0;
+                                task.errorMsg = '浏览器未启动下载';
+                                this.renderTask(task);
+                                this.saveTasks();
+                                this.processQueue();
+                            }
                         }
                     }
                 });
         } catch (e) {
             console.error('[DownloadManager] Server poll error:', e);
+        }
+        } finally {
+            this.serverPollInFlight = false;
         }
     }
 
@@ -540,11 +588,14 @@ class DownloadManager {
             if (!existing) {
                 const serverSongKey = isServerTask ? this.getServerSongKey(song, quality) : null;
                 const taskId = song.taskId || this.createTaskId(isServerTask ? 'server' : 'dl');
+                const useNativeDownload = !isServerTask && this.shouldUseNativeDownload(songs.length, quality);
 
                 this.tasks.push({
                     id: taskId,
                     song: song,
                     isServer: isServerTask,
+                    useNativeDownload,
+                    nativeDownloadDispatched: false,
                     serverSongKey,
                     quality: quality,
                     status: 'waiting',
@@ -586,6 +637,7 @@ class DownloadManager {
         while (this.activeCount < this.maxConcurrent) {
             const nextTask = this.tasks.find(t => t.status === 'waiting');
             if (!nextTask) break;
+            if (nextTask.useNativeDownload && this.activeCount > 0) break;
             if (typeof this.getDownloadResolver() !== 'function') {
                 setTimeout(() => this.processQueue(), 100);
                 break;
@@ -597,6 +649,7 @@ class DownloadManager {
             } else {
                 this.startDownload(nextTask);
             }
+            if (nextTask.useNativeDownload) break;
         }
         this.renderList();
         this.updateGlobalProgress();
@@ -692,12 +745,7 @@ class DownloadManager {
                     finalUrl += (finalUrl.includes('?') ? '&' : '?') + `token=${encodeURIComponent(authToken)}`;
                 }
 
-                // 推断后缀
-                try {
-                    const urlObj = new URL(finalUrl, window.location.origin);
-                    const path = urlObj.pathname;
-                    if (path.includes('.')) ext = path.split('.').pop();
-                } catch (e) { }
+                ext = this.getDownloadExtension(finalUrl, quality);
             } else {
                 const downloadResolver = await this.waitForDownloadResolver();
                 const resolveData = await downloadResolver(task.song, quality, true);
@@ -712,9 +760,7 @@ class DownloadManager {
                 this.renderTask(task);
 
                 finalUrl = resolveData.url;
-                ext = resolvedQuality || 'mp3';
-                if (ext.startsWith('flac')) ext = 'flac'; // Handle flac24bit -> flac
-                if (ext === '128k' || ext === '320k') ext = 'mp3';
+                ext = this.getDownloadExtension(finalUrl, resolvedQuality);
             }
 
             // Determine filename with collision handling
@@ -770,6 +816,19 @@ class DownloadManager {
                 console.log('[DownloadManager] Download with metadata proxy:', finalUrl);
             } else {
                 console.log('[DownloadManager] Simple download:', finalUrl);
+            }
+
+            if (task.useNativeDownload) {
+                if (task.controller.signal.aborted) throw new DOMException('Download paused', 'AbortError');
+                this.triggerNativeDownload(finalUrl, filename);
+                task.nativeDownloadDispatched = true;
+                task.status = 'downloading';
+                task.progress = 0;
+                task.speed = 0;
+                task.controller = null;
+                this.renderTask(task);
+                this.saveTasks();
+                return;
             }
 
             // 2. Fetch the actual file using Streams to track progress
@@ -974,19 +1033,50 @@ class DownloadManager {
     }
 
     pauseAll() {
+        const headers = { 'Content-Type': 'application/json', ...(window.getUserAuthHeaders ? window.getUserAuthHeaders() : {}) };
         this.tasks.forEach(t => {
-            if (t.status === 'downloading' || t.status === 'waiting' || t.status === 'tagging') {
-                this.pauseTask(t.id);
+            if (t.status !== 'downloading' && t.status !== 'waiting' && t.status !== 'tagging' && t.status !== 'starting') return;
+            if (t.nativeDownloadDispatched && t.status === 'downloading') return;
+
+            if (t.isServer) {
+                const songKey = this.getTaskServerSongKey(t);
+                fetch('/api/music/cache/stop', {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({ songKey })
+                }).catch(e => console.warn('[DownloadManager] Failed to stop server task:', e));
+            } else if (t.controller) {
+                t.controller.abort();
             }
+
+            t.status = 'paused';
+            t.speed = 0;
+            t.errorMsg = '已暂停';
         });
+        this.activeCount = 0;
+        this.renderList();
+        this.saveTasks();
+        this.updateGlobalProgress();
     }
 
     resumeAll() {
         this.tasks.forEach(t => {
-            if (t.status === 'paused') {
-                this.resumeTask(t.id);
-            }
+            if (t.status !== 'paused') return;
+            t.status = 'waiting';
+            t.downloadedBytes = 0;
+            t.totalBytes = 0;
+            t.progress = 0;
+            t.speed = 0;
+            t.errorMsg = '';
+            t.missingProgressCount = 0;
+            t.cacheRecheckPending = false;
+            t.lastPolledBytes = undefined;
+            t.lastPolledTime = undefined;
+            t.controller = null;
         });
+        this.renderList();
+        this.saveTasks();
+        this.processQueue();
     }
 
     retryAllFailed() {
@@ -1079,8 +1169,12 @@ class DownloadManager {
                 id: t.id,
                 song: this.getSongInfoForStorage(t.song),
                 isServer: t.isServer,
+                useNativeDownload: !!t.useNativeDownload,
+                nativeDownloadDispatched: !!t.nativeDownloadDispatched,
                 quality: t.quality,
-                status: t.isServer ? t.status : ((t.status === 'downloading' || t.status === 'tagging') ? 'waiting' : t.status),
+                status: t.isServer
+                    ? t.status
+                    : (['waiting', 'starting', 'downloading', 'tagging'].includes(t.status) ? 'paused' : t.status),
                 progress: (t.status === 'finished' || t.status === 'exists') ? 100 : (t.isServer ? t.progress : 0),
                 downloadedBytes: t.downloadedBytes || 0,
                 totalBytes: t.totalBytes || 0,
@@ -1088,7 +1182,9 @@ class DownloadManager {
                 serverSongKey: t.serverSongKey || '',
                 errorMsg: t.errorMsg || '',
                 retryCount: t.retryCount || 0,
-                maxRetries: t.maxRetries || 2
+                maxRetries: t.maxRetries || 2,
+                hasLyric: t.hasLyric === 'checking' ? undefined : t.hasLyric,
+                lyricRetryCount: t.lyricRetryCount || 0
             }));
             sessionStorage.setItem('lx_download_tasks', JSON.stringify(data));
         } catch (e) {
@@ -1105,14 +1201,19 @@ class DownloadManager {
             if (!Array.isArray(data) || data.length === 0) return;
 
             data.forEach(t => {
+                const restoredStatus = !t.isServer && ['waiting', 'starting', 'downloading', 'tagging'].includes(t.status)
+                    ? 'paused'
+                    : t.status;
                 this.tasks.push({
                     id: /^[A-Za-z0-9_-]+$/.test(String(t.id || '')) ? t.id : this.createTaskId(t.isServer ? 'server' : 'dl'),
                     song: t.song,
                     isServer: t.isServer || false,
+                    useNativeDownload: !t.isServer && (t.useNativeDownload !== false),
+                    nativeDownloadDispatched: !!t.nativeDownloadDispatched,
                     serverSongKey: t.serverSongKey || '',
                     quality: t.quality || '',
                     // Local downloading → reset to waiting to re-download; server/finished → keep status
-                    status: t.status,
+                    status: restoredStatus,
                     progress: t.progress || 0,
                     downloadedBytes: t.downloadedBytes || 0,
                     totalBytes: t.totalBytes || 0,
@@ -1120,6 +1221,8 @@ class DownloadManager {
                     errorMsg: t.errorMsg || '',
                     retryCount: t.retryCount || 0,
                     maxRetries: t.maxRetries || 2,
+                    hasLyric: t.hasLyric === 'checking' ? undefined : t.hasLyric,
+                    lyricRetryCount: t.lyricRetryCount || 0,
                     controller: null
                 });
             });
@@ -1197,10 +1300,10 @@ class DownloadManager {
             const hasRealProgress = isServerTask && (task.totalBytes > 0 || task.progress > 0);
             statusText = isServerTask
                 ? (hasRealProgress ? `云端 ${progressWidth}%` : '云端下载中')
-                : `${progressWidth}%`;
+                : (task.nativeDownloadDispatched ? `浏览器 ${progressWidth}%` : `${progressWidth}%`);
             speedText = `${this.formatSize(Math.max(0, task.speed || 0))}/s`;
 
-            if (!isServerTask) {
+            if (!isServerTask && !task.nativeDownloadDispatched) {
                 actionBtnHTML = `
                     <button onclick="window.SystemDownloadManager.pauseTask('${task.id}')" class="w-8 h-8 rounded-full border border-yellow-200 text-yellow-500 hover:bg-yellow-50 flex items-center justify-center transition-colors shadow-sm" title="暂停">
                         <i class="fas fa-pause text-xs"></i>
