@@ -23,7 +23,7 @@ import { initUserApis, callUserApiGetMusicUrl, isSourceSupported, getLoadedApis 
 import * as customSourceHandlers from './customSourceHandlers'
 import * as fileCache from './fileCache'
 import * as serverDownloadQueue from './serverDownloadQueue'
-import { resolveWithQualityFallback } from './downloadQuality'
+import { getDownloadQualityCandidates } from './downloadQuality'
 import crypto from 'node:crypto'
 import needle from 'needle'
 const { MusicTagger, MetaPicture } = require('music-tag-native')
@@ -601,15 +601,15 @@ const getHeaderValue = (headers: Record<string, any>, key: string): string | und
 }
 
 const parseContentLength = (headers: Record<string, any>): number | null => {
-  const length = Number(getHeaderValue(headers, 'content-length'))
-  if (Number.isFinite(length) && length > 0) return length
-
   const range = getHeaderValue(headers, 'content-range')
   const total = range?.match(/\/(\d+)$/)?.[1]
   if (total) {
     const parsed = Number(total)
     if (Number.isFinite(parsed) && parsed > 0) return parsed
   }
+
+  const length = Number(getHeaderValue(headers, 'content-length'))
+  if (Number.isFinite(length) && length > 0) return length
 
   return null
 }
@@ -651,6 +651,180 @@ const getAudioRemoteSize = async (audioUrl: string): Promise<number | null> => {
   }
 
   return null
+}
+
+const AUTO_SOURCE_ORDER = ['wy', 'tx', 'kw', 'kg', 'mg']
+const SOURCE_MATCH_CACHE_TTL = 60_000
+const sourceMatchCache = new Map<string, { expiresAt: number, promise: Promise<any[]> }>()
+
+const normalizeSongMatchText = (value: unknown) => String(value || '')
+  .toLowerCase()
+  .replace(/[（(\[].*?[）)\]]/g, '')
+  .replace(/[\s\p{P}\p{S}]/gu, '')
+
+const normalizeSongNameText = (value: unknown) => String(value || '')
+  .toLowerCase()
+  .replace(/[\s\p{P}\p{S}]/gu, '')
+
+const splitSingerNames = (value: unknown) => String(value || '')
+  .toLowerCase()
+  .split(/[、，,&；;|/+]/)
+  .map(normalizeSongMatchText)
+  .filter(Boolean)
+
+const isSingerMatch = (candidateSinger: unknown, targetSinger: unknown) => {
+  const candidateText = normalizeSongMatchText(candidateSinger)
+  const targetText = normalizeSongMatchText(targetSinger)
+  if (!targetText) return true
+  if (!candidateText) return false
+  if (candidateText.includes(targetText) || targetText.includes(candidateText)) return true
+
+  const candidateParts = splitSingerNames(candidateSinger)
+  const targetParts = splitSingerNames(targetSinger)
+  return candidateParts.some(candidatePart => targetParts.some(targetPart => (
+    candidatePart.includes(targetPart) || targetPart.includes(candidatePart)
+  )))
+}
+
+const getSongDurationSeconds = (value: unknown) => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value > 10000 ? Math.round(value / 1000) : Math.round(value)
+  }
+
+  const text = String(value || '').trim()
+  if (!text) return 0
+  if (/^\d+(?:\.\d+)?$/.test(text)) {
+    const parsed = Number(text)
+    return parsed > 10000 ? Math.round(parsed / 1000) : Math.round(parsed)
+  }
+
+  const parts = text.split(':').map(Number)
+  if (parts.some(part => !Number.isFinite(part))) return 0
+  if (parts.length === 2) return Math.round(parts[0] * 60 + parts[1])
+  if (parts.length === 3) return Math.round(parts[0] * 3600 + parts[1] * 60 + parts[2])
+  return 0
+}
+
+const getSongMatchScore = (candidate: any, target: any) => {
+  const candidateName = normalizeSongNameText(candidate?.name)
+  const targetName = normalizeSongNameText(target?.name)
+  if (!candidateName || !targetName) return -1
+  if (!candidateName.includes(targetName) && !targetName.includes(candidateName)) return -1
+  if (!isSingerMatch(candidate?.singer, target?.singer)) return -1
+
+  const candidateDuration = getSongDurationSeconds(candidate?.interval)
+  const targetDuration = getSongDurationSeconds(target?.interval)
+  let durationScore = 0
+  if (candidateDuration > 0 && targetDuration > 0) {
+    const durationDiff = Math.abs(candidateDuration - targetDuration)
+    if (durationDiff > 8) return -1
+    durationScore = 8 - durationDiff
+  }
+
+  const nameScore = candidateName === targetName ? 20 : 10
+  const candidateAlbum = normalizeSongMatchText(candidate?.albumName)
+  const targetAlbum = normalizeSongMatchText(target?.albumName)
+  const albumScore = candidateAlbum && targetAlbum && candidateAlbum === targetAlbum ? 3 : 0
+  return nameScore + durationScore + albumScore
+}
+
+const findServerSourceMatches = async (songInfo: any, username: string) => {
+  if (!songInfo?.name || !songInfo?.singer) return []
+
+  const cacheKey = [
+    username,
+    songInfo.source,
+    normalizeSongMatchText(songInfo.name),
+    normalizeSongMatchText(songInfo.singer),
+    getSongDurationSeconds(songInfo.interval),
+  ].join(':')
+  const now = Date.now()
+  const cached = sourceMatchCache.get(cacheKey)
+  if (cached && cached.expiresAt > now) return cached.promise
+
+  for (const [key, value] of sourceMatchCache) {
+    if (value.expiresAt <= now) sourceMatchCache.delete(key)
+  }
+
+  const searchSources = AUTO_SOURCE_ORDER.filter(source => (
+    source !== songInfo.source && isSourceSupported(source, username) && musicSdk[source]?.musicSearch?.search
+  ))
+  const query = `${songInfo.name} ${songInfo.singer}`
+  const promise = Promise.all(searchSources.map(async source => {
+    try {
+      const searchData = await musicSdk[source].musicSearch.search(query, 1, 20)
+      const list = Array.isArray(searchData?.list) ? searchData.list : []
+      return list.map((item: any) => ({ ...item, source }))
+    } catch (err: any) {
+      console.warn(`[ServerAutoSource] Search failed for ${source}: ${err?.message || err}`)
+      return []
+    }
+  })).then(resultGroups => resultGroups.flat()
+    .map(candidate => ({ candidate, score: getSongMatchScore(candidate, songInfo) }))
+    .filter(item => item.score >= 0)
+    .sort((a, b) => b.score - a.score)
+    .map(item => item.candidate))
+
+  sourceMatchCache.set(cacheKey, { expiresAt: now + SOURCE_MATCH_CACHE_TTL, promise })
+  return promise
+}
+
+interface ServerSongResolveResult {
+  url: string
+  quality: string
+  songInfo: any
+  sourceName?: string
+}
+
+const resolveServerSong = async (
+  rawSongInfo: any,
+  requestedQuality: string,
+  username: string,
+  allowQualityFallback: boolean,
+): Promise<ServerSongResolveResult> => {
+  const originalSong = normalizeSongInfo({ ...rawSongInfo })
+  if (!originalSong?.source) throw new Error('Missing song source')
+
+  const qualities = allowQualityFallback
+    ? getDownloadQualityCandidates(requestedQuality)
+    : [requestedQuality]
+  const errors: string[] = []
+
+  const tryCandidates = async (quality: string, rawCandidates: any[]) => {
+    for (const rawCandidate of rawCandidates) {
+      const candidate = normalizeSongInfo({ ...rawCandidate })
+      const source = candidate?.source
+      if (!source || !isSourceSupported(source, username)) continue
+
+      try {
+        const result = await callUserApiGetMusicUrl(source, candidate, quality, username, undefined, true)
+        if (!result?.url) throw new Error('audio source returned no URL')
+        return {
+          url: result.url,
+          quality: result.type || quality,
+          songInfo: candidate,
+          sourceName: result.sourceName,
+        }
+      } catch (err: any) {
+        errors.push(`${source}/${quality}: ${err?.message || 'resolve failed'}`)
+      }
+    }
+    return null
+  }
+
+  const originalResult = await tryCandidates(requestedQuality, [originalSong])
+  if (originalResult) return originalResult
+
+  const matches = await findServerSourceMatches(originalSong, username)
+  const switchedResult = await tryCandidates(requestedQuality, matches)
+  if (switchedResult) return switchedResult
+
+  for (const quality of qualities.slice(1)) {
+    const fallbackResult = await tryCandidates(quality, [originalSong, ...matches])
+    if (fallbackResult) return fallbackResult
+  }
+
+  throw new Error(`No downloadable source found (${errors.join('; ')})`)
 }
 
 const serveStatic = (req: IncomingMessage, res: http.ServerResponse, filePath: string) => {
@@ -4206,28 +4380,13 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
 
         void readBody(req).then(async body => {
           try {
-            let { songInfo, quality, enableAutoSwitchApiSource } = JSON.parse(body)
+            let { songInfo, quality } = JSON.parse(body)
             songInfo = normalizeSongInfo(songInfo)
             if (!songInfo || !songInfo.source || !quality) {
               throw new Error('Invalid quality size request')
             }
 
-            const source = songInfo.source
-            if (!isSourceSupported(source, verifiedUsername)) {
-              throw new Error(`未找到支持 ${source} 平台的自定义源，请在设置中添加或启用相关源`)
-            }
-
-            const result = await callUserApiGetMusicUrl(
-              source,
-              songInfo,
-              quality,
-              verifiedUsername,
-              undefined,
-              enableAutoSwitchApiSource !== false
-            )
-
-            if (!result?.url) throw new Error('音源未返回下载链接')
-
+            const result = await resolveServerSong(songInfo, quality, verifiedUsername, false)
             const bytes = await getAudioRemoteSize(result.url)
             if (!bytes) throw new Error('无法读取真实文件大小')
 
@@ -4237,7 +4396,8 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
               quality,
               bytes,
               size: formatBytes(bytes),
-              type: result.type || quality,
+              type: result.quality,
+              source: result.songInfo?.source,
               sourceName: result.sourceName,
             }))
           } catch (err: any) {
@@ -5922,18 +6082,12 @@ export const startServer = async (port: number, ip: string) => {
 
   serverDownloadQueue.initialize(async task => {
     const songInfo = normalizeSongInfo(task.songInfo)
-    const source = songInfo?.source
     const apiUsername = task.username === '_open' ? 'open' : task.username
-    if (!source || !isSourceSupported(source, apiUsername)) {
-      throw new Error(`未找到支持 ${source || 'unknown'} 平台的自定义源`)
-    }
-    const resolved = await resolveWithQualityFallback(task.requestedQuality, async quality => (
-      callUserApiGetMusicUrl(source, songInfo, quality, apiUsername, undefined, true)
-    ))
+    const resolved = await resolveServerSong(songInfo, task.requestedQuality, apiUsername, true)
     return {
-      url: resolved.result.url,
+      url: resolved.url,
       quality: resolved.quality,
-      songInfo,
+      songInfo: resolved.songInfo,
     }
   })
 
