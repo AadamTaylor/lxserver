@@ -2451,7 +2451,7 @@ function resetArtistAlbumDownloadProgress() {
     setArtistAlbumDownloadButton('fas fa-download', '下载全部', false);
 }
 
-async function collectArtistAlbumSongs(albums, source, signal, onProgress) {
+async function collectArtistAlbumSongs(albums, source, artistName, signal, onProgress) {
     const results = new Array(albums.length);
     const failedAlbums = [];
     let cursor = 0;
@@ -2487,8 +2487,14 @@ async function collectArtistAlbumSongs(albums, source, signal, onProgress) {
 
     const songs = [];
     const songKeys = new Set();
+    let filteredSongCount = 0;
     results.forEach((albumSongs, albumIndex) => {
         (albumSongs || []).forEach((song, songIndex) => {
+            const songSinger = song.singer || song.artist || song.artistName || song.meta?.singerName || song.meta?.singer;
+            if (artistName && !isSingerMatch(songSinger, artistName)) {
+                filteredSongCount++;
+                return;
+            }
             const songId = song.id ?? song.songmid ?? song.mid ?? song.meta?.songId ?? song.meta?.songmid;
             const key = songId !== undefined && songId !== null && songId !== ''
                 ? (song.source || source) + ':' + songId
@@ -2499,7 +2505,7 @@ async function collectArtistAlbumSongs(albums, source, signal, onProgress) {
         });
     });
 
-    return { songs, failedAlbums };
+    return { songs, failedAlbums, filteredSongCount };
 }
 
 async function downloadAllArtistAlbumSongs() {
@@ -2536,6 +2542,7 @@ async function downloadAllArtistAlbumSongs() {
         const result = await collectArtistAlbumSongs(
             albums,
             window.currentArtistSource || 'wy',
+            currentArtistInfo?.name || '',
             controller.signal,
             (completed, total) => {
                 if (window.artistAlbumDownloadController !== controller) return;
@@ -2558,9 +2565,12 @@ async function downloadAllArtistAlbumSongs() {
         const failureText = result.failedAlbums.length > 0
             ? '，' + result.failedAlbums.length + ' 张专辑读取失败'
             : '';
+        const filteredText = result.filteredSongCount > 0
+            ? '，已排除 ' + result.filteredSongCount + ' 首非当前歌手歌曲'
+            : '';
         await window.batchDownloadSongs(result.songs, {
             clearSelection: false,
-            selectionLabel: '从 ' + succeededAlbums + ' 张专辑读取到 ' + result.songs.length + ' 首去重歌曲' + failureText
+            selectionLabel: '从 ' + succeededAlbums + ' 张专辑读取到 ' + result.songs.length + ' 首去重歌曲' + filteredText + failureText
         });
     } catch (e) {
         if (controller.signal.aborted || e.name === 'AbortError') {

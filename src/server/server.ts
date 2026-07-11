@@ -23,6 +23,7 @@ import { initUserApis, callUserApiGetMusicUrl, isSourceSupported, getLoadedApis 
 import * as customSourceHandlers from './customSourceHandlers'
 import * as fileCache from './fileCache'
 import * as serverDownloadQueue from './serverDownloadQueue'
+import { resolveWithQualityFallback } from './downloadQuality'
 import crypto from 'node:crypto'
 import needle from 'needle'
 const { MusicTagger, MetaPicture } = require('music-tag-native')
@@ -5904,11 +5905,12 @@ export const startServer = async (port: number, ip: string) => {
     if (!source || !isSourceSupported(source, apiUsername)) {
       throw new Error(`未找到支持 ${source || 'unknown'} 平台的自定义源`)
     }
-    const result = await callUserApiGetMusicUrl(source, songInfo, task.requestedQuality, apiUsername, undefined, true)
-    if (!result?.url) throw new Error('无法解析下载地址')
+    const resolved = await resolveWithQualityFallback(task.requestedQuality, async quality => (
+      callUserApiGetMusicUrl(source, songInfo, quality, apiUsername, undefined, true)
+    ))
     return {
-      url: result.url,
-      quality: result.type || task.requestedQuality,
+      url: resolved.result.url,
+      quality: resolved.quality,
       songInfo,
     }
   })
