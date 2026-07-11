@@ -7,6 +7,13 @@
 const QUALITY_PRIORITY = ['master', 'atmos_plus', 'atmos', 'hires', 'flac24bit', 'flac', '320k', '192k', '128k'];
 const QUALITY_ORDER_LOW_TO_HIGH = [...QUALITY_PRIORITY].reverse();
 
+// These platforms can resolve qualities that older saved playlist entries do not advertise.
+// The server still performs the final availability check and quality fallback per song.
+const PLATFORM_SELECTABLE_QUALITIES = {
+    tx: ['128k', '320k', 'flac', 'flac24bit', 'hires', 'atmos', 'atmos_plus', 'master'],
+    wy: ['128k', '320k', 'flac', 'flac24bit', 'hires', 'atmos', 'master']
+};
+
 // 音质显示名称
 const QUALITY_NAMES = {
     master: '母带音质',
@@ -69,6 +76,12 @@ function getAvailableQualities(songInfo) {
     return sortQualitiesLowToHigh(Object.keys(types).filter(k => isQualityEntryAvailable(types[k])));
 }
 
+function getSelectableQualities(songInfo) {
+    const source = songInfo?.source || songInfo?.meta?.source;
+    const platformQualities = PLATFORM_SELECTABLE_QUALITIES[source];
+    return platformQualities ? [...platformQualities] : getAvailableQualities(songInfo);
+}
+
 function getBestQuality(songInfo, userPreference = '320k') {
     if (!songInfo) return '128k';
 
@@ -128,11 +141,13 @@ function isQualityAvailable(songInfo, quality) {
 window.QualityManager = {
     QUALITY_PRIORITY,
     QUALITY_ORDER_LOW_TO_HIGH,
+    PLATFORM_SELECTABLE_QUALITIES,
     QUALITY_NAMES,
     QUALITY_COLORS,
     getBestQuality,
     getNextLowerQuality,
     getAvailableQualities,
+    getSelectableQualities,
     getQualityDisplayName,
     getQualityColor,
     isQualityAvailable

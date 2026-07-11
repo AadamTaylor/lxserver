@@ -100,7 +100,10 @@ function getQualityOptionLabel(song, quality) {
     return `${name} [${getSongQualitySize(song, quality) || '未知大小'}]`;
 }
 
-function getSelectableQualityOrder() {
+function getSelectableQualityOrder(song = null) {
+    if (song && window.QualityManager?.getSelectableQualities) {
+        return window.QualityManager.getSelectableQualities(song);
+    }
     return window.QualityManager?.QUALITY_ORDER_LOW_TO_HIGH ||
         (window.QualityManager?.QUALITY_PRIORITY ? [...window.QualityManager.QUALITY_PRIORITY].reverse() : ['128k', '320k', 'flac', 'flac24bit', 'hires', 'atmos', 'atmos_plus', 'master']);
 }
@@ -309,7 +312,7 @@ async function downloadSong(songOrId, forceQuality = null, suppressAlerts = fals
 
     if (selected === '浏览器下载') {
         if (window.SystemDownloadManager) {
-            const availableQualities = window.QualityManager ? window.QualityManager.getAvailableQualities(song) : ['128k'];
+            const availableQualities = getSelectableQualityOrder(song);
             const qualityDisplayNames = await buildQualityOptionLabels(song, availableQualities);
             const selectedQualityDisplay = await showOptions('选择下载音质', `请选择对 [${song.name}] 的下载音质：`, qualityDisplayNames);
             if (!selectedQualityDisplay) return false;
@@ -343,8 +346,8 @@ async function downloadSong(songOrId, forceQuality = null, suppressAlerts = fals
         }
         let targetQuality = forceQuality;
         if (!targetQuality) {
-            // 获取该歌曲实际支持的音质列表
-            const availableQualities = window.QualityManager ? window.QualityManager.getAvailableQualities(song) : ['128k'];
+            // 收藏中的旧元数据可能缺少平台实际可解析的高音质。
+            const availableQualities = getSelectableQualityOrder(song);
             const qualityDisplayNames = await buildQualityOptionLabels(song, availableQualities);
             const selectedQualityDisplay = await showOptions('选择缓存音质', `请选择对 [${song.name}] 的缓存音质：`, qualityDisplayNames);
             if (!selectedQualityDisplay) return false;

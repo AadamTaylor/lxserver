@@ -8981,6 +8981,14 @@ function handleListClick(listId, skipAutoUpdate = false) {
 
     if (!currentListData) return;
 
+    if (!skipAutoUpdate) {
+        // Selections belong to the previously rendered list. Keeping them here makes
+        // the toolbar count include invisible songs after opening another favorite list.
+        window.selectedItems?.clear();
+        window.selectedSongObjects?.clear();
+        if (typeof updateBatchToolbar === 'function') updateBatchToolbar();
+    }
+
     // Mobile: Close sidebar when a list is selected
     if (window.innerWidth < 1025) {
         const sidebar = document.getElementById('main-sidebar');
