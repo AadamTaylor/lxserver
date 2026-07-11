@@ -22,6 +22,7 @@ const musicSdk = musicSdkRaw as any
 import { initUserApis, callUserApiGetMusicUrl, isSourceSupported, getLoadedApis } from './userApi'
 import * as customSourceHandlers from './customSourceHandlers'
 import * as fileCache from './fileCache'
+import * as serverDownloadQueue from './serverDownloadQueue'
 import crypto from 'node:crypto'
 import needle from 'needle'
 const { MusicTagger, MetaPicture } = require('music-tag-native')
@@ -237,6 +238,12 @@ export const verifyUserAuth = (req: IncomingMessage): string | null => {
   */
 
   return null
+}
+
+const getCacheRequestUsername = (req: IncomingMessage): string | null => {
+  const requested = (req.headers['x-user-name'] as string) || ''
+  if (!requested || requested === 'default' || requested === 'open' || requested === '_open') return '_open'
+  return verifyUserAuth(req)
 }
 
 /** 定期清理过期用户 Token（每小时） */
@@ -2391,6 +2398,91 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
         return
       }
 
+      // Persistent server download queue. These tasks continue after the browser closes.
+      if (pathname === '/api/music/cache/queue' && req.method === 'GET') {
+        const username = getCacheRequestUsername(req)
+        if (!username) {
+          res.writeHead(401, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ success: false, message: 'Unauthorized' }))
+          return
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ success: true, data: serverDownloadQueue.list(username) }))
+        return
+      }
+
+      if (pathname === '/api/music/cache/queue' && req.method === 'POST') {
+        const username = getCacheRequestUsername(req)
+        if (!username) {
+          res.writeHead(401, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ success: false, message: 'Unauthorized' }))
+          return
+        }
+        void readBody(req).then(body => {
+          try {
+            const { tasks, namingPattern } = JSON.parse(body)
+            if (!Array.isArray(tasks) || tasks.length === 0) throw new Error('Missing tasks')
+            if (namingPattern) {
+              const auth = req.headers['x-frontend-auth']
+              if (auth !== global.lx.config['frontend.password']) throw new Error('Unauthorized to change cache naming pattern')
+              fileCache.setNamingPattern(namingPattern)
+              if (global.lx.config) global.lx.config['cache.namingPattern'] = namingPattern
+            }
+            const queued = serverDownloadQueue.enqueue(username, tasks)
+            res.writeHead(200, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: true, data: queued }))
+          } catch (err: any) {
+            res.writeHead(400, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: false, message: err.message || 'Invalid queue request' }))
+          }
+        })
+        return
+      }
+
+      if (pathname === '/api/music/cache/queue/resume' && req.method === 'POST') {
+        const username = getCacheRequestUsername(req)
+        if (!username) {
+          res.writeHead(401, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ success: false, message: 'Unauthorized' }))
+          return
+        }
+        void readBody(req).then(body => {
+          try {
+            const { id, all } = JSON.parse(body)
+            if (all !== true && !id) throw new Error('Missing queue task id')
+            serverDownloadQueue.resume(username, all ? undefined : id)
+            res.writeHead(200, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: true }))
+          } catch (err: any) {
+            res.writeHead(400, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: false, message: err.message }))
+          }
+        })
+        return
+      }
+
+      if (pathname === '/api/music/cache/queue/remove' && req.method === 'POST') {
+        const username = getCacheRequestUsername(req)
+        if (!username) {
+          res.writeHead(401, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ success: false, message: 'Unauthorized' }))
+          return
+        }
+        void readBody(req).then(body => {
+          try {
+            const options = JSON.parse(body)
+            if (!options || (options.all !== true && options.completed !== true && !options.id)) throw new Error('Missing queue removal option')
+            serverDownloadQueue.remove(username, options)
+            res.writeHead(200, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: true }))
+          } catch (err: any) {
+            res.writeHead(400, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: false, message: err.message }))
+          }
+        })
+        return
+      }
+
       // 3. Trigger Download
       if (pathname === '/api/music/cache/download' && req.method === 'POST') {
         void readBody(req).then(body => {
@@ -2486,10 +2578,14 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
         }
         void readBody(req).then(body => {
           try {
-            const { songKey, all } = JSON.parse(body)
+            const { songKey, queueId, all } = JSON.parse(body)
             if (all) {
               fileCache.stopUserTasks(username)
+              serverDownloadQueue.pause(username)
               console.log(`[Cache] Stopped all tasks for user: ${username}`)
+            } else if (queueId) {
+              serverDownloadQueue.pause(username, queueId)
+              console.log(`[Cache] Paused persistent queue task ${queueId} for user: ${username}`)
             } else if (songKey) {
               fileCache.stopUserTasks(username, songKey)
               console.log(`[Cache] Stopped task ${songKey} for user: ${username}`)
@@ -5800,6 +5896,22 @@ export const startServer = async (port: number, ip: string) => {
   } catch (err: any) {
     console.warn('[Server] Failed to restore fileCache location:', err.message)
   }
+
+  serverDownloadQueue.initialize(async task => {
+    const songInfo = normalizeSongInfo(task.songInfo)
+    const source = songInfo?.source
+    const apiUsername = task.username === '_open' ? 'open' : task.username
+    if (!source || !isSourceSupported(source, apiUsername)) {
+      throw new Error(`未找到支持 ${source || 'unknown'} 平台的自定义源`)
+    }
+    const result = await callUserApiGetMusicUrl(source, songInfo, task.requestedQuality, apiUsername, undefined, true)
+    if (!result?.url) throw new Error('无法解析下载地址')
+    return {
+      url: result.url,
+      quality: result.type || task.requestedQuality,
+      songInfo,
+    }
+  })
 
   await handleStartServer(port, ip).then(() => {
     // console.log('sync server started')
