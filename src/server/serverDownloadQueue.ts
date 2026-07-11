@@ -42,9 +42,11 @@ interface ResolveResult {
 
 type DownloadResolver = (task: ServerDownloadTask) => Promise<ResolveResult>
 
-const MAX_CONCURRENT = 3
+const DEFAULT_CONCURRENT = 3
+const MAX_CONCURRENT_PER_USER = 5
 const tasks = new Map<string, ServerDownloadTask>()
 const controllers = new Map<string, AbortController>()
+const concurrencyByUser = new Map<string, number>()
 let resolver: DownloadResolver | null = null
 let initialized = false
 let processing = false
@@ -53,6 +55,14 @@ let saveTimer: ReturnType<typeof setTimeout> | null = null
 const taskMapKey = (username: string, id: string) => `${username}:${id}`
 const getQueueFile = () => path.join(global.lx.dataPath, 'server-download-queue.json')
 const validStatuses = new Set<ServerDownloadStatus>(['waiting', 'downloading', 'tagging', 'paused', 'finished', 'exists', 'error'])
+
+const normalizeConcurrency = (value: unknown) => {
+  const parsed = Number.parseInt(String(value), 10)
+  if (!Number.isFinite(parsed)) return DEFAULT_CONCURRENT
+  return Math.min(MAX_CONCURRENT_PER_USER, Math.max(1, parsed))
+}
+
+export const getConcurrency = (username: string) => concurrencyByUser.get(username) || DEFAULT_CONCURRENT
 
 const sanitizeId = (value: unknown) => {
   const id = String(value || '')
@@ -65,7 +75,11 @@ const saveNow = () => {
   const tempFile = `${file}.tmp`
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true })
-    fs.writeFileSync(tempFile, JSON.stringify(Array.from(tasks.values()), null, 2), 'utf8')
+    fs.writeFileSync(tempFile, JSON.stringify({
+      version: 2,
+      concurrencyByUser: Object.fromEntries(concurrencyByUser),
+      tasks: Array.from(tasks.values()),
+    }, null, 2), 'utf8')
     fs.renameSync(tempFile, file)
   } catch (err) {
     console.warn('[ServerDownloadQueue] Failed to save queue:', err)
@@ -86,8 +100,14 @@ const loadTasks = () => {
   if (!fs.existsSync(file)) return
   try {
     const data = JSON.parse(fs.readFileSync(file, 'utf8'))
-    if (!Array.isArray(data)) return
-    for (const raw of data) {
+    const savedTasks = Array.isArray(data) ? data : data?.tasks
+    if (!Array.isArray(savedTasks)) return
+    if (!Array.isArray(data) && data?.concurrencyByUser && typeof data.concurrencyByUser === 'object') {
+      for (const [username, value] of Object.entries(data.concurrencyByUser)) {
+        concurrencyByUser.set(username, normalizeConcurrency(value))
+      }
+    }
+    for (const raw of savedTasks) {
       if (!raw || !raw.username || !raw.songInfo) continue
       const id = sanitizeId(raw.id)
       const savedStatus = validStatuses.has(raw.status) ? raw.status as ServerDownloadStatus : 'waiting'
@@ -201,14 +221,30 @@ const processQueue = async () => {
   if (processing || !resolver) return
   processing = true
   try {
-    while (controllers.size < MAX_CONCURRENT) {
-      const next = Array.from(tasks.values()).find(task => task.status === 'waiting')
+    while (true) {
+      const activeByUser = new Map<string, number>()
+      for (const key of controllers.keys()) {
+        const username = tasks.get(key)?.username
+        if (!username) continue
+        activeByUser.set(username, (activeByUser.get(username) || 0) + 1)
+      }
+      const next = Array.from(tasks.values()).find(task => (
+        task.status === 'waiting' && (activeByUser.get(task.username) || 0) < getConcurrency(task.username)
+      ))
       if (!next) break
       void runTask(next)
     }
   } finally {
     processing = false
   }
+}
+
+export const setConcurrency = (username: string, value: unknown) => {
+  const concurrency = normalizeConcurrency(value)
+  concurrencyByUser.set(username, concurrency)
+  saveNow()
+  void processQueue()
+  return concurrency
 }
 
 export const initialize = (downloadResolver: DownloadResolver) => {

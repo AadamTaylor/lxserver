@@ -2421,8 +2421,9 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
         }
         void readBody(req).then(body => {
           try {
-            const { tasks, namingPattern } = JSON.parse(body)
+            const { tasks, namingPattern, concurrency } = JSON.parse(body)
             if (!Array.isArray(tasks) || tasks.length === 0) throw new Error('Missing tasks')
+            if (concurrency !== undefined) serverDownloadQueue.setConcurrency(username, concurrency)
             if (namingPattern) {
               const auth = req.headers['x-frontend-auth']
               if (auth !== global.lx.config['frontend.password']) throw new Error('Unauthorized to change cache naming pattern')
@@ -2435,6 +2436,27 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
           } catch (err: any) {
             res.writeHead(400, { 'Content-Type': 'application/json' })
             res.end(JSON.stringify({ success: false, message: err.message || 'Invalid queue request' }))
+          }
+        })
+        return
+      }
+
+      if (pathname === '/api/music/cache/queue/concurrency' && req.method === 'POST') {
+        const username = getCacheRequestUsername(req)
+        if (!username) {
+          res.writeHead(401, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ success: false, message: 'Unauthorized' }))
+          return
+        }
+        void readBody(req).then(body => {
+          try {
+            const { concurrency } = JSON.parse(body)
+            const savedConcurrency = serverDownloadQueue.setConcurrency(username, concurrency)
+            res.writeHead(200, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: true, data: { concurrency: savedConcurrency } }))
+          } catch (err: any) {
+            res.writeHead(400, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: false, message: err.message || 'Invalid concurrency' }))
           }
         })
         return

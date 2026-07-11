@@ -37,6 +37,7 @@ class DownloadManager {
 
         // Restore tasks from sessionStorage
         this.restoreTasks();
+        setTimeout(() => this.syncServerConcurrency(), 300);
         setTimeout(() => this.syncServerQueue(true), 500);
     }
 
@@ -105,7 +106,16 @@ class DownloadManager {
     updateMaxConcurrent(value) {
         this.maxConcurrent = this.normalizeConcurrency(value);
         console.log('[DownloadManager] Concurrency limit updated to:', this.maxConcurrent);
+        this.syncServerConcurrency();
         this.processQueue();
+    }
+
+    async syncServerConcurrency() {
+        try {
+            await this.requestServerQueue('/api/music/cache/queue/concurrency', { concurrency: this.maxConcurrent });
+        } catch (error) {
+            console.warn('[DownloadManager] Failed to sync server concurrency:', error);
+        }
     }
 
     normalizeConcurrency(value) {
@@ -137,6 +147,7 @@ class DownloadManager {
         try {
             const headers = this.getServerQueueHeaders();
             const payload = {
+                concurrency: this.maxConcurrent,
                 tasks: tasks.map(task => ({
                     id: task.id,
                     songInfo: this.getSongInfoForServer(task.song),
