@@ -37,6 +37,17 @@ function getSongQualityCacheKey(song, quality) {
 function applySongQualitySize(song, quality, size) {
     if (!song || !quality || !size) return;
 
+    // Older favorites only contain the qualities known when they were saved.
+    // Always create a canonical entry so newly supported qualities can be read
+    // back by getSongQualitySize after the remote probe succeeds.
+    if (!song._types || typeof song._types !== 'object' || Array.isArray(song._types)) {
+        song._types = {};
+    }
+    if (!song._types[quality] || typeof song._types[quality] !== 'object') {
+        song._types[quality] = {};
+    }
+    song._types[quality].size = size;
+
     const maps = [song._types, song._qualitys, song.meta?._types, song.meta?._qualitys];
     maps.forEach(map => {
         if (map?.[quality]) map[quality].size = size;
@@ -76,7 +87,8 @@ async function fetchRemoteQualitySize(song, quality) {
         return size;
     } catch (e) {
         console.warn(`[QualitySize] 获取 ${quality} 真实大小失败:`, e);
-        remoteQualitySizeCache.set(cacheKey, null);
+        // Do not make a transient source/network failure permanent for this tab.
+        remoteQualitySizeCache.delete(cacheKey);
         return null;
     }
 }
