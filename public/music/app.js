@@ -7745,7 +7745,7 @@ function renderLibraryAlbums(list) {
         div.dataset.libAlbumId = item.id;
         div.dataset.libAlbumSource = item.source;
         div.onclick = (e) => {
-            if (e.target.closest('.lib-batch-check') || e.target.closest('.lib-fav-btn')) return;
+            if (e.target.closest('.lib-batch-check') || e.target.closest('.lib-fav-btn') || e.target.closest('.lib-album-download-btn')) return;
             if (window.libraryBatchMode === 'album') {
                 toggleLibAlbumBatchSelect(item.id);
                 return;
@@ -7760,6 +7760,15 @@ function renderLibraryAlbums(list) {
                 <div class="lib-batch-check absolute inset-0 bg-black/40 hidden items-center justify-center rounded-xl">
                     <i class="fas fa-check-circle text-white text-3xl"></i>
                 </div>
+                <div class="absolute top-1.5 right-1.5 flex gap-1.5">
+                    <button type="button" class="lib-album-download-btn w-8 h-8 rounded-full bg-black/45 hover:bg-emerald-500 text-white flex items-center justify-center opacity-100 sm:opacity-0 group-hover:opacity-100 transition-all shadow-sm disabled:opacity-60 disabled:cursor-wait" title="下载本专辑全部歌曲">
+                        <i class="fas fa-download text-xs"></i>
+                    </button>
+                    <button type="button" class="lib-fav-btn w-8 h-8 rounded-full bg-red-400/80 hover:bg-red-500 text-white flex items-center justify-center opacity-100 sm:opacity-0 group-hover:opacity-100 transition-all shadow-sm" title="取消收藏"
+                            onclick="event.stopPropagation(); removeLibraryAlbum('${item.id}', '${item.source}')">
+                        <i class="fas fa-times text-xs"></i>
+                    </button>
+                </div>
             </div>
             <span class="text-sm font-bold t-text-main line-clamp-2 h-10 leading-5 mb-1" title="${item.name}">${item.name}</span>
             <div class="flex items-center justify-between mt-1">
@@ -7768,12 +7777,12 @@ function renderLibraryAlbums(list) {
                     ${item.list && item.list.length ? `<span class="ml-1 text-emerald-500 font-bold">(${item.list.length} 首)</span>` : ''}
                 </span>
                 <span class="text-[10px] t-text-muted ml-2">${getSourceTag ? getSourceTag(item.source) : ''}</span>
-            </div>
-            <button class="lib-fav-btn absolute top-3 right-3 w-7 h-7 rounded-full bg-red-400/80 hover:bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
-                    title="取消收藏"
-                    onclick="event.stopPropagation(); removeLibraryAlbum('${item.id}', '${item.source}')">
-                <i class="fas fa-times text-xs"></i>
-            </button>`;
+            </div>`;
+        const downloadButton = div.querySelector('.lib-album-download-btn');
+        downloadButton?.addEventListener('click', async event => {
+            event.stopPropagation();
+            await downloadArtistAlbumSongs(item, downloadButton);
+        });
         grid.appendChild(div);
     });
 }
