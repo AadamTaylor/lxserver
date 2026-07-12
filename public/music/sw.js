@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lx-music-web-v18';
+const CACHE_NAME = 'lx-music-web-v19';
 const ASSETS_TO_CACHE = [
     './',
     './index.html',

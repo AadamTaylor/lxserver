@@ -407,7 +407,7 @@ async function downloadSong(songOrId, forceQuality = null, suppressAlerts = fals
     return false;
 }
 
-// Batch download function shared by list selection and artist album collection.
+// Batch download function shared by list selection and album downloads.
 async function batchDownloadSongs(songsToDownload, batchOptions = {}) {
     if (!Array.isArray(songsToDownload) || songsToDownload.length === 0) {
         showError(batchOptions.emptyMessage || '未找到要下载的歌曲');
