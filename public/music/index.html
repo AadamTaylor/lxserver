@@ -1101,7 +1101,23 @@
                                         <button
                                             class="lm-filter-tag shrink-0 !text-[9px] !px-1.5 !py-0.5 md:!px-2 md:!py-1"
                                             data-filter-value="flac24bit"
-                                            onclick="window.LocalMusicManager.toggleFilterTag('quality','flac24bit')">Hi-Res</button>
+                                            onclick="window.LocalMusicManager.toggleFilterTag('quality','flac24bit')">24bit</button>
+                                        <button
+                                            class="lm-filter-tag shrink-0 !text-[9px] !px-1.5 !py-0.5 md:!px-2 md:!py-1"
+                                            data-filter-value="hires"
+                                            onclick="window.LocalMusicManager.toggleFilterTag('quality','hires')">Hi-Res</button>
+                                        <button
+                                            class="lm-filter-tag shrink-0 !text-[9px] !px-1.5 !py-0.5 md:!px-2 md:!py-1"
+                                            data-filter-value="atmos"
+                                            onclick="window.LocalMusicManager.toggleFilterTag('quality','atmos')">Atmos</button>
+                                        <button
+                                            class="lm-filter-tag shrink-0 !text-[9px] !px-1.5 !py-0.5 md:!px-2 md:!py-1"
+                                            data-filter-value="atmos_plus"
+                                            onclick="window.LocalMusicManager.toggleFilterTag('quality','atmos_plus')">Atmos+</button>
+                                        <button
+                                            class="lm-filter-tag shrink-0 !text-[9px] !px-1.5 !py-0.5 md:!px-2 md:!py-1"
+                                            data-filter-value="master"
+                                            onclick="window.LocalMusicManager.toggleFilterTag('quality','master')">Master</button>
                                     </div>
                                 </div>
 
@@ -1299,6 +1315,18 @@
                             <p class="font-bold tracking-wider">正在加载本地音乐...</p>
                         </div>
                     </div>
+                    <div id="lm-pagination"
+                        class="flex-shrink-0 flex items-center justify-center gap-2 md:gap-4 py-2 border-x border-b t-border-main rounded-b-xl t-bg-panel/80 hidden">
+                        <button id="lm-page-prev" onclick="window.LocalMusicManager.changePage(-1)"
+                            class="px-2 md:px-4 py-1.5 text-xs md:text-sm t-bg-main border t-border-main rounded-lg hover:t-bg-track disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                            <i class="fas fa-chevron-left md:mr-1"></i><span class="hidden sm:inline">上一页</span>
+                        </button>
+                        <span id="lm-page-info" class="text-[10px] md:text-sm t-text-muted font-medium">第 1 / 1 页</span>
+                        <button id="lm-page-next" onclick="window.LocalMusicManager.changePage(1)"
+                            class="px-2 md:px-4 py-1.5 text-xs md:text-sm t-bg-main border t-border-main rounded-lg hover:t-bg-track disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                            <span class="hidden sm:inline">下一页</span><i class="fas fa-chevron-right md:ml-1"></i>
+                        </button>
+                    </div>
                 </div>
 
                 <!-- Settings View -->
@@ -1402,10 +1430,14 @@
                                         </h4>
                                         <select id="quality-select" onchange="changeQualityPreference(this.value)"
                                             class="lm-select !w-full !py-2">
-                                            <option value="128k">标准 128K (流畅)</option>
-                                            <option value="320k" selected>高品质 320K (推荐)</option>
-                                            <option value="flac">无损 FLAC</option>
-                                            <option value="flac24bit">无损 Hi-Res (最高)</option>
+                                            <option value="128k">标准音质</option>
+                                            <option value="320k" selected>高音质</option>
+                                            <option value="flac">无损音质</option>
+                                            <option value="flac24bit">24bit无损</option>
+                                            <option value="hires">高解析度</option>
+                                            <option value="atmos">空间音频</option>
+                                            <option value="atmos_plus">增强空间音频</option>
+                                            <option value="master">母带音质</option>
                                         </select>
                                     </div>
 
@@ -1562,13 +1594,13 @@
                                                 </span>
                                             </div>
                                         </div>
-                                        <select id="setting-download-concurrency" class="lm-select !w-20 !py-1">
+                                        <select id="setting-download-concurrency" class="lm-select !w-20 !py-1"
+                                            onchange="updateSetting('downloadConcurrency', parseInt(this.value))">
                                             <option value="1">1</option>
                                             <option value="2">2</option>
-                                            <option value="3">3</option>
+                                            <option value="3" selected>3</option>
                                             <option value="4">4</option>
                                             <option value="5">5</option>
-                                            <option value="6">6</option>
                                         </select>
                                     </div>
                                 </div>
@@ -1687,6 +1719,26 @@
                                                 class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 transition-all">
                                             </div>
                                         </label>
+                                    </div>
+
+                                    <div class="grid grid-cols-1 gap-3 md:grid-cols-[1fr_auto] md:items-center">
+                                        <div>
+                                            <div class="text-sm font-bold t-text-main">网络歌单自动检测间隔</div>
+                                            <div class="text-xs t-text-muted mt-1">输入值示例：30m / 6h / 1d，开启后自动检测并标记已更新歌单。</div>
+                                        </div>
+                                        <input id="setting-network-list-auto-check-interval" type="text"
+                                            class="w-full md:w-40 rounded-xl border t-border-main px-3 py-2 text-sm bg-transparent focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                                            onchange="updateSetting('networkListAutoCheckInterval', this.value)">
+                                    </div>
+                                    <div class="flex items-center justify-between">
+                                        <div>
+                                            <div class="text-sm font-bold t-text-main">检查所有歌单更新</div>
+                                            <div class="text-xs t-text-muted mt-1">手动触发一次网络歌单更新检测，结果会在侧边栏中显示。</div>
+                                        </div>
+                                        <button type="button" onclick="checkNetworkListUpdates(true)"
+                                            class="px-4 py-2 rounded-xl bg-emerald-500 text-white text-sm font-medium hover:bg-emerald-600 transition-all">
+                                            立即检查
+                                        </button>
                                     </div>
 
                                     <!-- [Renamed] Save Settings to Server Toggle -->

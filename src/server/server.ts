@@ -22,6 +22,8 @@ const musicSdk = musicSdkRaw as any
 import { initUserApis, callUserApiGetMusicUrl, isSourceSupported, getLoadedApis } from './userApi'
 import * as customSourceHandlers from './customSourceHandlers'
 import * as fileCache from './fileCache'
+import * as serverDownloadQueue from './serverDownloadQueue'
+import { getDownloadQualityCandidates } from './downloadQuality'
 import crypto from 'node:crypto'
 import needle from 'needle'
 const { MusicTagger, MetaPicture } = require('music-tag-native')
@@ -237,6 +239,12 @@ export const verifyUserAuth = (req: IncomingMessage): string | null => {
   */
 
   return null
+}
+
+const getCacheRequestUsername = (req: IncomingMessage): string | null => {
+  const requested = (req.headers['x-user-name'] as string) || ''
+  if (!requested || requested === 'default' || requested === 'open' || requested === '_open') return '_open'
+  return verifyUserAuth(req)
 }
 
 /** 定期清理过期用户 Token（每小时） */
@@ -578,6 +586,246 @@ const readBody = async (req: IncomingMessage) => await new Promise<string>((reso
   })
   req.on('error', reject)
 })
+
+const formatBytes = (bytes: number): string => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return ''
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
+  return `${(bytes / Math.pow(1024, index)).toFixed(2)} ${units[index]}`
+}
+
+const getHeaderValue = (headers: Record<string, any>, key: string): string | undefined => {
+  const value = headers[key] ?? headers[key.toLowerCase()]
+  if (Array.isArray(value)) return value[0]
+  return value == null ? undefined : String(value)
+}
+
+const parseContentLength = (headers: Record<string, any>): number | null => {
+  const range = getHeaderValue(headers, 'content-range')
+  const total = range?.match(/\/(\d+)$/)?.[1]
+  if (total) {
+    const parsed = Number(total)
+    if (Number.isFinite(parsed) && parsed > 0) return parsed
+  }
+
+  const length = Number(getHeaderValue(headers, 'content-length'))
+  if (Number.isFinite(length) && length > 0) return length
+
+  return null
+}
+
+const getAudioRemoteSize = async (audioUrl: string): Promise<number | null> => {
+  if (!/^https?:\/\//i.test(audioUrl)) return null
+
+  const urlObj = new URL(audioUrl)
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Referer': urlObj.origin,
+  }
+  const options = {
+    follow_max: 5,
+    response_timeout: 8000,
+    read_timeout: 8000,
+    headers,
+  }
+
+  try {
+    const resp = await needle('head', audioUrl, null, options)
+    const size = parseContentLength(resp.headers || {})
+    if (size) return size
+  } catch (e: any) {
+    console.warn(`[QualitySize] HEAD failed: ${e.message}`)
+  }
+
+  try {
+    const resp = await needle('get', audioUrl, null, {
+      ...options,
+      headers: {
+        ...headers,
+        Range: 'bytes=0-0',
+      },
+    })
+    return parseContentLength(resp.headers || {})
+  } catch (e: any) {
+    console.warn(`[QualitySize] Range probe failed: ${e.message}`)
+  }
+
+  return null
+}
+
+const AUTO_SOURCE_ORDER = ['wy', 'tx', 'kw', 'kg', 'mg']
+const SOURCE_MATCH_CACHE_TTL = 60_000
+const sourceMatchCache = new Map<string, { expiresAt: number, promise: Promise<any[]> }>()
+
+const normalizeSongMatchText = (value: unknown) => String(value || '')
+  .toLowerCase()
+  .replace(/[（(\[].*?[）)\]]/g, '')
+  .replace(/[\s\p{P}\p{S}]/gu, '')
+
+const normalizeSongNameText = (value: unknown) => String(value || '')
+  .toLowerCase()
+  .replace(/[\s\p{P}\p{S}]/gu, '')
+
+const splitSingerNames = (value: unknown) => String(value || '')
+  .toLowerCase()
+  .split(/[、，,&；;|/+]/)
+  .map(normalizeSongMatchText)
+  .filter(Boolean)
+
+const isSingerMatch = (candidateSinger: unknown, targetSinger: unknown) => {
+  const candidateText = normalizeSongMatchText(candidateSinger)
+  const targetText = normalizeSongMatchText(targetSinger)
+  if (!targetText) return true
+  if (!candidateText) return false
+  if (candidateText.includes(targetText) || targetText.includes(candidateText)) return true
+
+  const candidateParts = splitSingerNames(candidateSinger)
+  const targetParts = splitSingerNames(targetSinger)
+  return candidateParts.some(candidatePart => targetParts.some(targetPart => (
+    candidatePart.includes(targetPart) || targetPart.includes(candidatePart)
+  )))
+}
+
+const getSongDurationSeconds = (value: unknown) => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value > 10000 ? Math.round(value / 1000) : Math.round(value)
+  }
+
+  const text = String(value || '').trim()
+  if (!text) return 0
+  if (/^\d+(?:\.\d+)?$/.test(text)) {
+    const parsed = Number(text)
+    return parsed > 10000 ? Math.round(parsed / 1000) : Math.round(parsed)
+  }
+
+  const parts = text.split(':').map(Number)
+  if (parts.some(part => !Number.isFinite(part))) return 0
+  if (parts.length === 2) return Math.round(parts[0] * 60 + parts[1])
+  if (parts.length === 3) return Math.round(parts[0] * 3600 + parts[1] * 60 + parts[2])
+  return 0
+}
+
+const getSongMatchScore = (candidate: any, target: any) => {
+  const candidateName = normalizeSongNameText(candidate?.name)
+  const targetName = normalizeSongNameText(target?.name)
+  if (!candidateName || !targetName) return -1
+  if (!candidateName.includes(targetName) && !targetName.includes(candidateName)) return -1
+  if (!isSingerMatch(candidate?.singer, target?.singer)) return -1
+
+  const candidateDuration = getSongDurationSeconds(candidate?.interval)
+  const targetDuration = getSongDurationSeconds(target?.interval)
+  let durationScore = 0
+  if (candidateDuration > 0 && targetDuration > 0) {
+    const durationDiff = Math.abs(candidateDuration - targetDuration)
+    if (durationDiff > 8) return -1
+    durationScore = 8 - durationDiff
+  }
+
+  const nameScore = candidateName === targetName ? 20 : 10
+  const candidateAlbum = normalizeSongMatchText(candidate?.albumName)
+  const targetAlbum = normalizeSongMatchText(target?.albumName)
+  const albumScore = candidateAlbum && targetAlbum && candidateAlbum === targetAlbum ? 3 : 0
+  return nameScore + durationScore + albumScore
+}
+
+const findServerSourceMatches = async (songInfo: any, username: string) => {
+  if (!songInfo?.name || !songInfo?.singer) return []
+
+  const cacheKey = [
+    username,
+    songInfo.source,
+    normalizeSongMatchText(songInfo.name),
+    normalizeSongMatchText(songInfo.singer),
+    getSongDurationSeconds(songInfo.interval),
+  ].join(':')
+  const now = Date.now()
+  const cached = sourceMatchCache.get(cacheKey)
+  if (cached && cached.expiresAt > now) return cached.promise
+
+  for (const [key, value] of sourceMatchCache) {
+    if (value.expiresAt <= now) sourceMatchCache.delete(key)
+  }
+
+  const searchSources = AUTO_SOURCE_ORDER.filter(source => (
+    source !== songInfo.source && isSourceSupported(source, username) && musicSdk[source]?.musicSearch?.search
+  ))
+  const query = `${songInfo.name} ${songInfo.singer}`
+  const promise = Promise.all(searchSources.map(async source => {
+    try {
+      const searchData = await musicSdk[source].musicSearch.search(query, 1, 20)
+      const list = Array.isArray(searchData?.list) ? searchData.list : []
+      return list.map((item: any) => ({ ...item, source }))
+    } catch (err: any) {
+      console.warn(`[ServerAutoSource] Search failed for ${source}: ${err?.message || err}`)
+      return []
+    }
+  })).then(resultGroups => resultGroups.flat()
+    .map(candidate => ({ candidate, score: getSongMatchScore(candidate, songInfo) }))
+    .filter(item => item.score >= 0)
+    .sort((a, b) => b.score - a.score)
+    .map(item => item.candidate))
+
+  sourceMatchCache.set(cacheKey, { expiresAt: now + SOURCE_MATCH_CACHE_TTL, promise })
+  return promise
+}
+
+interface ServerSongResolveResult {
+  url: string
+  quality: string
+  songInfo: any
+  sourceName?: string
+}
+
+const resolveServerSong = async (
+  rawSongInfo: any,
+  requestedQuality: string,
+  username: string,
+  allowQualityFallback: boolean,
+): Promise<ServerSongResolveResult> => {
+  const originalSong = normalizeSongInfo({ ...rawSongInfo })
+  if (!originalSong?.source) throw new Error('Missing song source')
+
+  const qualities = allowQualityFallback
+    ? getDownloadQualityCandidates(requestedQuality)
+    : [requestedQuality]
+  const errors: string[] = []
+
+  const tryCandidates = async (quality: string, rawCandidates: any[]) => {
+    for (const rawCandidate of rawCandidates) {
+      const candidate = normalizeSongInfo({ ...rawCandidate })
+      const source = candidate?.source
+      if (!source || !isSourceSupported(source, username)) continue
+
+      try {
+        const result = await callUserApiGetMusicUrl(source, candidate, quality, username, undefined, true)
+        if (!result?.url) throw new Error('audio source returned no URL')
+        return {
+          url: result.url,
+          quality: result.type || quality,
+          songInfo: candidate,
+          sourceName: result.sourceName,
+        }
+      } catch (err: any) {
+        errors.push(`${source}/${quality}: ${err?.message || 'resolve failed'}`)
+      }
+    }
+    return null
+  }
+
+  const originalResult = await tryCandidates(requestedQuality, [originalSong])
+  if (originalResult) return originalResult
+
+  const matches = await findServerSourceMatches(originalSong, username)
+  const switchedResult = await tryCandidates(requestedQuality, matches)
+  if (switchedResult) return switchedResult
+
+  for (const quality of qualities.slice(1)) {
+    const fallbackResult = await tryCandidates(quality, [originalSong, ...matches])
+    if (fallbackResult) return fallbackResult
+  }
+
+  throw new Error(`No downloadable source found (${errors.join('; ')})`)
+}
 
 const serveStatic = (req: IncomingMessage, res: http.ServerResponse, filePath: string) => {
   const contentType = getMime(filePath)
@@ -1802,7 +2050,7 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
             // [核心逻辑] 如果是受限的公开用户，仅允许保存特定的 3 项设置
             if (resolvedUsername === '_open' && global.lx.config['user.enablePublicRestriction']) {
               const restrictedSettings: any = {}
-              const allowedKeys = ['enableServerCache', 'enableServerLyricCache', 'serverCacheLocation']
+              const allowedKeys = ['enableServerCache', 'enableServerLyricCache', 'serverCacheLocation', 'serverCacheNamingPattern', 'downloadConcurrency']
               allowedKeys.forEach(key => {
                 if (settings[key] !== undefined) restrictedSettings[key] = settings[key]
               })
@@ -2325,11 +2573,118 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
         return
       }
 
+      // Persistent server download queue. These tasks continue after the browser closes.
+      if (pathname === '/api/music/cache/queue' && req.method === 'GET') {
+        const username = getCacheRequestUsername(req)
+        if (!username) {
+          res.writeHead(401, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ success: false, message: 'Unauthorized' }))
+          return
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ success: true, data: serverDownloadQueue.list(username) }))
+        return
+      }
+
+      if (pathname === '/api/music/cache/queue' && req.method === 'POST') {
+        const username = getCacheRequestUsername(req)
+        if (!username) {
+          res.writeHead(401, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ success: false, message: 'Unauthorized' }))
+          return
+        }
+        void readBody(req).then(body => {
+          try {
+            const { tasks, namingPattern, concurrency } = JSON.parse(body)
+            if (!Array.isArray(tasks) || tasks.length === 0) throw new Error('Missing tasks')
+            if (concurrency !== undefined) serverDownloadQueue.setConcurrency(username, concurrency)
+            if (namingPattern) {
+              const auth = req.headers['x-frontend-auth']
+              if (auth !== global.lx.config['frontend.password']) throw new Error('Unauthorized to change cache naming pattern')
+              fileCache.setNamingPattern(namingPattern)
+              if (global.lx.config) global.lx.config['cache.namingPattern'] = namingPattern
+            }
+            const queued = serverDownloadQueue.enqueue(username, tasks)
+            res.writeHead(200, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: true, data: queued }))
+          } catch (err: any) {
+            res.writeHead(400, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: false, message: err.message || 'Invalid queue request' }))
+          }
+        })
+        return
+      }
+
+      if (pathname === '/api/music/cache/queue/concurrency' && req.method === 'POST') {
+        const username = getCacheRequestUsername(req)
+        if (!username) {
+          res.writeHead(401, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ success: false, message: 'Unauthorized' }))
+          return
+        }
+        void readBody(req).then(body => {
+          try {
+            const { concurrency } = JSON.parse(body)
+            const savedConcurrency = serverDownloadQueue.setConcurrency(username, concurrency)
+            res.writeHead(200, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: true, data: { concurrency: savedConcurrency } }))
+          } catch (err: any) {
+            res.writeHead(400, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: false, message: err.message || 'Invalid concurrency' }))
+          }
+        })
+        return
+      }
+
+      if (pathname === '/api/music/cache/queue/resume' && req.method === 'POST') {
+        const username = getCacheRequestUsername(req)
+        if (!username) {
+          res.writeHead(401, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ success: false, message: 'Unauthorized' }))
+          return
+        }
+        void readBody(req).then(body => {
+          try {
+            const { id, all } = JSON.parse(body)
+            if (all !== true && !id) throw new Error('Missing queue task id')
+            serverDownloadQueue.resume(username, all ? undefined : id)
+            res.writeHead(200, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: true }))
+          } catch (err: any) {
+            res.writeHead(400, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: false, message: err.message }))
+          }
+        })
+        return
+      }
+
+      if (pathname === '/api/music/cache/queue/remove' && req.method === 'POST') {
+        const username = getCacheRequestUsername(req)
+        if (!username) {
+          res.writeHead(401, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ success: false, message: 'Unauthorized' }))
+          return
+        }
+        void readBody(req).then(body => {
+          try {
+            const options = JSON.parse(body)
+            if (!options || (options.all !== true && options.completed !== true && !options.id)) throw new Error('Missing queue removal option')
+            serverDownloadQueue.remove(username, options)
+            res.writeHead(200, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: true }))
+          } catch (err: any) {
+            res.writeHead(400, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: false, message: err.message }))
+          }
+        })
+        return
+      }
+
       // 3. Trigger Download
       if (pathname === '/api/music/cache/download' && req.method === 'POST') {
         void readBody(req).then(body => {
           try {
-            const { songInfo, url, quality, enableOnlyDownloadMode, embedLyric } = JSON.parse(body)
+            const { songInfo, url, quality, enableOnlyDownloadMode, namingPattern, cacheLyric, embedLyric } = JSON.parse(body)
             if (!songInfo || !url) {
               res.writeHead(400)
               res.end('Missing params')
@@ -2350,6 +2705,16 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
               }
               username = verified
             }
+            if (namingPattern) {
+              const auth = req.headers['x-frontend-auth']
+              if (auth !== global.lx.config['frontend.password']) {
+                res.writeHead(403, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify({ success: false, error: 'Unauthorized to change cache naming pattern' }))
+                return
+              }
+              fileCache.setNamingPattern(namingPattern)
+              if (global.lx.config) global.lx.config['cache.namingPattern'] = namingPattern
+            }
             const songKey = fileCache.normalizeSongId(songInfo) + '_' + (quality || 'unknown')
 
             console.log(`[Cache] Registering active task: ${songKey} for user: "${username}"`)
@@ -2362,7 +2727,7 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
             }
             userTasks.push({ songKey, controller })
 
-            void fileCache.downloadAndCache(songInfo, url, quality, username, controller.signal, !!enableOnlyDownloadMode, embedLyric !== false)
+            void fileCache.downloadAndCache(songInfo, url, quality, username, controller.signal, !!enableOnlyDownloadMode, cacheLyric !== false, embedLyric !== false)
               .then(() => console.log(`[Cache] Downloaded ${songInfo.name} for ${username || '_open'}`))
               .catch((err: any) => {
                 if (err.message === 'Aborted') {
@@ -2410,10 +2775,14 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
         }
         void readBody(req).then(body => {
           try {
-            const { songKey, all } = JSON.parse(body)
+            const { songKey, queueId, all } = JSON.parse(body)
             if (all) {
               fileCache.stopUserTasks(username)
+              serverDownloadQueue.pause(username)
               console.log(`[Cache] Stopped all tasks for user: ${username}`)
+            } else if (queueId) {
+              serverDownloadQueue.pause(username, queueId)
+              console.log(`[Cache] Paused persistent queue task ${queueId} for user: ${username}`)
             } else if (songKey) {
               fileCache.stopUserTasks(username, songKey)
               console.log(`[Cache] Stopped task ${songKey} for user: ${username}`)
@@ -3219,33 +3588,49 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                   const chunks: any[] = []
                   let received = 0
                   const total = parseInt(proxyRes.headers['content-length'] as string || '0', 10)
+                  let lastSpeedAt = Date.now()
+                  let lastSpeedBytes = 0
+                  let currentSpeed = 0
 
                   if (taskId) {
-                    fileCache.cacheProgress.set(taskId, { progress: 0, status: 'downloading', total, received: 0 })
+                    fileCache.cacheProgress.set(taskId, { progress: 0, status: 'downloading', total, received: 0, speed: 0, updatedAt: Date.now() })
                   }
 
                   proxyRes.on('data', (c: any) => {
                     chunks.push(c)
                     if (taskId) {
                       received += c.length
+                      const now = Date.now()
+                      if (now - lastSpeedAt >= 1000) {
+                        currentSpeed = Math.max(0, (received - lastSpeedBytes) / ((now - lastSpeedAt) / 1000))
+                        lastSpeedAt = now
+                        lastSpeedBytes = received
+                      }
                       const progress = total > 0 ? Math.round((received / total) * 100) : 0
-                      fileCache.cacheProgress.set(taskId, { progress, status: 'downloading', total, received })
+                      fileCache.cacheProgress.set(taskId, { progress, status: 'downloading', total, received, speed: currentSpeed, updatedAt: now })
                     }
                   })
                   proxyRes.on('end', async () => {
                     if (taskId) {
-                      fileCache.cacheProgress.set(taskId, { progress: 100, status: 'tagging', total, received: total })
+                      fileCache.cacheProgress.set(taskId, { progress: 100, status: 'tagging', total, received, speed: 0, updatedAt: Date.now() })
                     }
+                    const finishProgress = () => {
+                      if (!taskId) return
+                      fileCache.cacheProgress.set(taskId, { progress: 100, status: 'finished', total: total || received, received, speed: 0, updatedAt: Date.now() })
+                      setTimeout(() => fileCache.cacheProgress.delete(taskId), 30000)
+                    }
+                    let tempPath = ''
+                    let tagger: any = null
                     try {
                       const buffer = Buffer.concat(chunks)
                       if (buffer.length < 100) throw new Error('File too small, possibly invalid');
 
                       // Use filename extension for temp file so MusicTagger can identify container format
                       const ext = path.extname(filename) || '.mp3'
-                      const tempPath = path.join(os.tmpdir(), `lx_tag_${Date.now()}${ext}`)
+                      tempPath = path.join(os.tmpdir(), `lx_tag_${Date.now()}_${crypto.randomBytes(8).toString('hex')}${ext}`)
                       fs.writeFileSync(tempPath, new Uint8Array(buffer))
 
-                      const tagger = new MusicTagger()
+                      tagger = new MusicTagger()
                       tagger.loadPath(tempPath)
                       if (songName) tagger.title = songName
                       if (artist) tagger.artist = artist
@@ -3295,24 +3680,24 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                       tagger.save()
                       console.log('[DownloadProxy] Metadata saved successfully for:', songName)
                       tagger.dispose()
-
-                      if (taskId) {
-                        fileCache.cacheProgress.set(taskId, { progress: 100, status: 'finished', total, received: total })
-                        setTimeout(() => fileCache.cacheProgress.delete(taskId), 30000)
-                      }
+                      tagger = null
 
                       const tagged = fs.readFileSync(tempPath)
-                      fs.unlink(tempPath, () => { })
                       headers['Content-Length'] = tagged.length.toString()
                       if (!res.headersSent) {
                         res.writeHead(200, headers)
                         res.end(tagged)
                       }
+                      finishProgress()
                     } catch (e: any) {
                       if (!res.headersSent) {
                         res.writeHead(200, headers)
                         res.end(Buffer.concat(chunks))
                       }
+                      finishProgress()
+                    } finally {
+                      if (tagger) tagger.dispose()
+                      if (tempPath) fs.unlink(tempPath, () => { })
                     }
                   })
                   return
@@ -3766,15 +4151,18 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
           res.writeHead(400); res.end('Missing id'); return
         }
         try {
-          const MAX_PAGES = 5  // 最多拉取 5 页 = 500 首
           const PAGE_SIZE = 100
+          const configuredMaxPages = Number((global.lx.config as any)?.['artist.maxFetchPages'])
+          const MAX_PAGES = Number.isFinite(configuredMaxPages) && configuredMaxPages > 0
+            ? Math.min(Math.floor(configuredMaxPages), 100)
+            : 20
           let allSongs: any[] = []
           for (let p = 1; p <= MAX_PAGES; p++) {
             const data = await musicSdk[source].extendDetail.getArtistSongs(id, p, PAGE_SIZE, order)
             const pageList: any[] = data.list || []
             allSongs = allSongs.concat(pageList)
-            // 如果本页返回数量小于 PAGE_SIZE，说明已经是最后一页
-            if (pageList.length < PAGE_SIZE) break
+            const total = Number(data.total) || 0
+            if (pageList.length < PAGE_SIZE || (total > 0 && allSongs.length >= total)) break
           }
           res.writeHead(200, { 'Content-Type': 'application/json' })
           res.end(JSON.stringify(allSongs))
@@ -3970,6 +4358,52 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
             // [Fix] Return 500 but with specific error JSON to let frontend show detailed toast
             res.writeHead(500, { 'Content-Type': 'application/json' })
             res.end(JSON.stringify({ error: err.message, code: 500, attempts: err.attempts }))
+          }
+        })
+        return
+      }
+
+      // [新增] 音质真实大小 API
+      if (pathname === '/api/music/quality/size' && req.method === 'POST') {
+        const clientUsername = req.headers['x-user-name'] as string | undefined
+
+        let verifiedUsername = 'open'
+        if (clientUsername && clientUsername !== 'default' && clientUsername !== 'open' && clientUsername !== '_open') {
+          const verified = verifyUserAuth(req)
+          if (!verified || verified !== clientUsername) {
+            res.writeHead(401, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: false, message: 'Unauthorized' }))
+            return
+          }
+          verifiedUsername = verified
+        }
+
+        void readBody(req).then(async body => {
+          try {
+            let { songInfo, quality } = JSON.parse(body)
+            songInfo = normalizeSongInfo(songInfo)
+            if (!songInfo || !songInfo.source || !quality) {
+              throw new Error('Invalid quality size request')
+            }
+
+            const result = await resolveServerSong(songInfo, quality, verifiedUsername, false)
+            const bytes = await getAudioRemoteSize(result.url)
+            if (!bytes) throw new Error('无法读取真实文件大小')
+
+            res.writeHead(200, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({
+              success: true,
+              quality,
+              bytes,
+              size: formatBytes(bytes),
+              type: result.quality,
+              source: result.songInfo?.source,
+              sourceName: result.sourceName,
+            }))
+          } catch (err: any) {
+            console.error('[QualitySize] Error:', err.message)
+            res.writeHead(500, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: false, error: err.message, code: 500 }))
           }
         })
         return
@@ -4497,6 +4931,7 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
             'subsonic.enable': global.lx.config['subsonic.enable'] ?? true,
             'subsonic.path': global.lx.config['subsonic.path'] ?? '/rest',
             'singer.sourcePriority': (global.lx.config['singer.sourcePriority'] || ['tx', 'wy']).join(','),
+            'artist.maxFetchPages': global.lx.config['artist.maxFetchPages'] ?? 20,
             'system.allowUnsafeVM': global.lx.config['system.allowUnsafeVM'] || false,
           }
           res.writeHead(200, {
@@ -4595,6 +5030,12 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                 const priority = String(newConfig['singer.sourcePriority']).split(',').filter(s => s === 'tx' || s === 'wy') as Array<'tx' | 'wy'>
                 if (priority.length > 0) global.lx.config['singer.sourcePriority'] = priority
               }
+              if (newConfig['artist.maxFetchPages'] !== undefined) {
+                const maxPages = Number(newConfig['artist.maxFetchPages'])
+                global.lx.config['artist.maxFetchPages'] = Number.isFinite(maxPages) && maxPages > 0
+                  ? Math.min(Math.floor(maxPages), 100)
+                  : 20
+              }
 
               // 更新 WebDAVSync 配置
               if (global.lx.webdavSync && (newConfig['webdav.url'] || newConfig['webdav.username'] || newConfig['webdav.password'] || newConfig['sync.interval'])) {
@@ -4629,6 +5070,7 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                 'player.path': global.lx.config['player.path'] ?? '/music',
                 'subsonic.enable': global.lx.config['subsonic.enable'],
                 'subsonic.path': global.lx.config['subsonic.path'],
+                'artist.maxFetchPages': global.lx.config['artist.maxFetchPages'],
                 'system.allowUnsafeVM': global.lx.config['system.allowUnsafeVM'],
                 users: global.lx.config.users.map(u => ({
                   name: u.name,
@@ -5629,10 +6071,25 @@ export const startServer = async (port: number, ip: string) => {
         fileCache.setCacheLocation(savedSettings.serverCacheLocation)
         console.log(`[Server] Restored fileCache location from settings: ${savedSettings.serverCacheLocation}`)
       }
+      if (savedSettings.serverCacheNamingPattern) {
+        fileCache.setNamingPattern(savedSettings.serverCacheNamingPattern)
+        console.log(`[Server] Restored cache naming pattern from settings: ${savedSettings.serverCacheNamingPattern}`)
+      }
     }
   } catch (err: any) {
     console.warn('[Server] Failed to restore fileCache location:', err.message)
   }
+
+  serverDownloadQueue.initialize(async task => {
+    const songInfo = normalizeSongInfo(task.songInfo)
+    const apiUsername = task.username === '_open' ? 'open' : task.username
+    const resolved = await resolveServerSong(songInfo, task.requestedQuality, apiUsername, true)
+    return {
+      url: resolved.url,
+      quality: resolved.quality,
+      songInfo: resolved.songInfo,
+    }
+  })
 
   await handleStartServer(port, ip).then(() => {
     // console.log('sync server started')

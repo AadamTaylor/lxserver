@@ -431,8 +431,13 @@ class SubsonicHandler {
         const meta = (music as any).meta || {}
         const qualitys = meta.qualitys || (music as any).types || []
 
-        // 定义检查逻辑：flac > 320k > 192k > 128k
+        // 定义检查逻辑：master > atmos_plus > atmos > hires > flac24bit > flac > 320k > 192k > 128k
         const qMap: Record<string, { bitRate: number, suffix: string, contentType: string }> = {
+            'master': { bitRate: 2304, suffix: 'flac', contentType: 'audio/flac' },
+            'atmos_plus': { bitRate: 1500, suffix: 'm4a', contentType: 'audio/mp4' },
+            'atmos': { bitRate: 1000, suffix: 'm4a', contentType: 'audio/mp4' },
+            'hires': { bitRate: 2304, suffix: 'flac', contentType: 'audio/flac' },
+            'flac24bit': { bitRate: 2304, suffix: 'flac', contentType: 'audio/flac' },
             'flac': { bitRate: 999, suffix: 'flac', contentType: 'audio/flac' },
             '320k': { bitRate: 320, suffix: 'mp3', contentType: 'audio/mpeg' },
             '192k': { bitRate: 192, suffix: 'mp3', contentType: 'audio/mpeg' },
@@ -440,7 +445,7 @@ class SubsonicHandler {
         }
 
         // 尝试按优先级匹配
-        for (const q of ['flac', '320k', '192k', '128k']) {
+        for (const q of ['master', 'atmos_plus', 'atmos', 'hires', 'flac24bit', 'flac', '320k', '192k', '128k']) {
             if (qualitys.some((item: any) => item.type === q)) {
                 return { ...qMap[q], size: 0 }
             }

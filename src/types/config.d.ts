@@ -175,6 +175,10 @@ declare namespace LX {
      */
     'singer.sourcePriority': Array<'tx' | 'wy'>
     /**
+     * 歌手歌曲最大抓取页数
+     */
+    'artist.maxFetchPages'?: number
+    /**
      * 缓存命名规则
      */
     'cache.namingPattern'?: string
@@ -188,4 +192,3 @@ declare namespace LX {
     'system.allowUnsafeVM'?: boolean
   }
 }
-

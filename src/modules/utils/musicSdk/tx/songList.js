@@ -1,6 +1,7 @@
 import { httpFetch } from '../../request'
-import { decodeName, formatPlayTime, sizeFormate, dateFormat, formatPlayCount } from '../../index'
+import { decodeName, formatPlayTime, dateFormat, formatPlayCount } from '../../index'
 import { formatSingerName } from '../utils'
+import { buildQualitys } from './quality'
 
 export default {
   _requestObj_tags: null,
@@ -31,6 +32,7 @@ export default {
   tagsUrl: 'https://u.y.qq.com/cgi-bin/musicu.fcg?loginUin=0&hostUin=0&format=json&inCharset=utf-8&outCharset=utf-8&notice=0&platform=wk_v15.json&needNewCode=0&data=%7B%22tags%22%3A%7B%22method%22%3A%22get_all_categories%22%2C%22param%22%3A%7B%22qq%22%3A%22%22%7D%2C%22module%22%3A%22playlist.PlaylistAllCategoriesServer%22%7D%7D',
   hotTagUrl: 'https://c.y.qq.com/node/pc/wk_v15/category_playlist.html',
   getListUrl(sortId, id, page) {
+    const order = Number(sortId) || 5
     if (id) {
       id = parseInt(id)
       return `https://u.y.qq.com/cgi-bin/musicu.fcg?loginUin=0&hostUin=0&format=json&inCharset=utf-8&outCharset=utf-8&notice=0&platform=wk_v15.json&needNewCode=0&data=${encodeURIComponent(JSON.stringify({
@@ -44,6 +46,8 @@ export default {
             size: this.limit_list,
             page: page - 1,
             use_page: 1,
+            order,
+            sort: order,
           },
           module: 'playlist.PlayListCategoryServer',
         },
@@ -53,7 +57,7 @@ export default {
       comm: { cv: 1602, ct: 20 },
       playlist: {
         method: 'get_playlist_by_tag',
-        param: { id: 10000000, sin: this.limit_list * (page - 1), size: this.limit_list, order: sortId, cur_page: page },
+        param: { id: 10000000, sin: this.limit_list * (page - 1), size: this.limit_list, order, cur_page: page },
         module: 'playlist.PlayListPlazaServer',
       },
     }))}`
@@ -226,36 +230,7 @@ export default {
   filterListDetail(rawList) {
     // console.log(rawList)
     return rawList.map(item => {
-      let types = []
-      let _types = {}
-      if (item.file.size_128mp3 !== 0) {
-        let size = sizeFormate(item.file.size_128mp3)
-        types.push({ type: '128k', size })
-        _types['128k'] = {
-          size,
-        }
-      }
-      if (item.file.size_320mp3 !== 0) {
-        let size = sizeFormate(item.file.size_320mp3)
-        types.push({ type: '320k', size })
-        _types['320k'] = {
-          size,
-        }
-      }
-      if (item.file.size_flac !== 0) {
-        let size = sizeFormate(item.file.size_flac)
-        types.push({ type: 'flac', size })
-        _types.flac = {
-          size,
-        }
-      }
-      if (item.file.size_hires !== 0) {
-        let size = sizeFormate(item.file.size_hires)
-        types.push({ type: 'flac24bit', size })
-        _types.flac24bit = {
-          size,
-        }
-      }
+      const { types, _types } = buildQualitys(item.file)
       // types.reverse()
       return {
         singer: formatSingerName(item.singer, 'name'),

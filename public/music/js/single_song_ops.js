@@ -1,3 +1,125 @@
+function getSongQualitySize(song, quality) {
+    const maps = [
+        song?._types,
+        song?._qualitys,
+        song?.meta?._types,
+        song?.meta?._qualitys
+    ];
+    for (const map of maps) {
+        const size = map?.[quality]?.size;
+        if (size && size !== '0 B') return size;
+    }
+
+    const lists = [
+        song?.types,
+        song?.qualitys,
+        song?.meta?.types,
+        song?.meta?.qualitys
+    ];
+    for (const list of lists) {
+        if (!Array.isArray(list)) continue;
+        const size = list.find(t => (t?.type || t) === quality)?.size;
+        if (size && size !== '0 B') return size;
+    }
+
+    return null;
+}
+
+const remoteQualitySizeCache = new Map();
+
+function getSongQualityCacheKey(song, quality) {
+    const meta = song?.meta || {};
+    const source = song?.source || meta.source || '';
+    const id = song?.songmid || song?.songId || song?.id || meta.songId || meta.songmid || '';
+    return `${source}:${id}:${quality}`;
+}
+
+function applySongQualitySize(song, quality, size) {
+    if (!song || !quality || !size) return;
+
+    // Older favorites only contain the qualities known when they were saved.
+    // Always create a canonical entry so newly supported qualities can be read
+    // back by getSongQualitySize after the remote probe succeeds.
+    if (!song._types || typeof song._types !== 'object' || Array.isArray(song._types)) {
+        song._types = {};
+    }
+    if (!song._types[quality] || typeof song._types[quality] !== 'object') {
+        song._types[quality] = {};
+    }
+    song._types[quality].size = size;
+
+    const maps = [song._types, song._qualitys, song.meta?._types, song.meta?._qualitys];
+    maps.forEach(map => {
+        if (map?.[quality]) map[quality].size = size;
+    });
+
+    const lists = [song.types, song.qualitys, song.meta?.types, song.meta?.qualitys];
+    lists.forEach(list => {
+        if (!Array.isArray(list)) return;
+        const item = list.find(t => (t?.type || t) === quality);
+        if (item && typeof item === 'object') item.size = size;
+    });
+}
+
+async function fetchRemoteQualitySize(song, quality) {
+    const existingSize = getSongQualitySize(song, quality);
+    if (existingSize) return existingSize;
+
+    const cacheKey = getSongQualityCacheKey(song, quality);
+    if (remoteQualitySizeCache.has(cacheKey)) return remoteQualitySizeCache.get(cacheKey);
+
+    try {
+        const authHeaders = typeof getUserAuthHeaders === 'function' ? getUserAuthHeaders() : {};
+        const res = await fetch('/api/music/quality/size', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...authHeaders
+            },
+            body: JSON.stringify({ songInfo: song, quality })
+        });
+        if (!res.ok) throw new Error(await res.text());
+
+        const data = await res.json();
+        const size = data?.size || null;
+        if (size) applySongQualitySize(song, quality, size);
+        remoteQualitySizeCache.set(cacheKey, size);
+        return size;
+    } catch (e) {
+        console.warn(`[QualitySize] 获取 ${quality} 真实大小失败:`, e);
+        // Do not make a transient source/network failure permanent for this tab.
+        remoteQualitySizeCache.delete(cacheKey);
+        return null;
+    }
+}
+
+async function buildQualityOptionLabels(song, qualities) {
+    const missingQualities = qualities.filter(q => !getSongQualitySize(song, q));
+    if (missingQualities.length > 0) {
+        window.showLoading?.('正在读取音质大小...');
+        try {
+            await Promise.all(missingQualities.map(q => fetchRemoteQualitySize(song, q)));
+        } finally {
+            window.hideLoading?.();
+        }
+    }
+
+    return qualities.map(q => getQualityOptionLabel(song, q));
+}
+
+function getQualityOptionLabel(song, quality) {
+    const name = window.QualityManager ? window.QualityManager.getQualityDisplayName(quality) : quality;
+    return `${name} [${getSongQualitySize(song, quality) || '未知大小'}]`;
+}
+
+function getSelectableQualityOrder(song = null) {
+    if (song && window.QualityManager?.getSelectableQualities) {
+        return window.QualityManager.getSelectableQualities(song);
+    }
+    return window.QualityManager?.QUALITY_ORDER_LOW_TO_HIGH ||
+        (window.QualityManager?.QUALITY_PRIORITY ? [...window.QualityManager.QUALITY_PRIORITY].reverse() : ['128k', '320k', 'flac', 'flac24bit', 'hires', 'atmos', 'atmos_plus', 'master']);
+}
+
 // Single song deletion
 async function deleteSingleSong(songId) {
     if (!(await showSelect('删除歌曲', '确定要删除这首歌曲吗?', { danger: true }))) {
@@ -99,24 +221,32 @@ async function deleteSingleSong(songId) {
  * @param {Boolean} force 是否强制同步（忽略设置开关，用于手动点击按钮）
  */
 async function requestServerLyricCache(song, quality = null, force = false) {
-    if (!force && (typeof settings === 'undefined' || settings.enableServerLyricCache === false)) return;
+    if (!force && (typeof settings === 'undefined' || settings.enableServerLyricCache === false)) return false;
 
     console.log(`[Lyric] 尝试同步下载歌词缓存: ${song.name} (${quality || 'auto'})`);
     try {
-        const source = song.source;
-        const songmid = song.songmid;
-        const name = encodeURIComponent(song.name);
-        const singer = encodeURIComponent(song.singer);
-        const hash = song.hash || '';
-        const interval = song.interval || '';
+        const meta = song.meta || {};
+        const source = song.source || meta.source || '';
+        const songmid = song.songmid || song.songId || meta.songmid || meta.songId || song.id || '';
+        const nameValue = song.name || meta.songName || '';
+        const singerValue = song.singer || meta.singerName || '';
+        const name = encodeURIComponent(nameValue);
+        const singer = encodeURIComponent(singerValue);
+        const hash = song.hash || meta.hash || '';
+        const interval = song.interval || meta.interval || '';
+
+        if (!source || !songmid) {
+            console.warn('[Lyric] 歌曲缺少必要字段，跳过歌词缓存同步:', song);
+            return false;
+        }
 
         // 1. 先尝试获取歌词数据
         const lyricUrl = `/api/music/lyric?source=${source}&songmid=${songmid}&name=${name}&singer=${singer}&hash=${hash}&interval=${interval}`;
         const lRes = await fetch(lyricUrl);
-        if (!lRes.ok) return;
+        if (!lRes.ok) return false;
         const lyricInfo = await lRes.json();
 
-        if (!lyricInfo || (!lyricInfo.lyric && !lyricInfo.lrc)) return;
+        if (!lyricInfo || (!lyricInfo.lyric && !lyricInfo.lrc)) return false;
 
         // 2. 将歌词推送到服务器缓存接口
         const cacheUrl = `/api/music/cache/lyric`;
@@ -126,12 +256,21 @@ async function requestServerLyricCache(song, quality = null, force = false) {
         };
 
         // 构建包含音质信息的 songInfo
-        const songInfoForCache = { ...song };
+        const songInfoForCache = {
+            ...song,
+            source,
+            songmid,
+            songId: song.songId || meta.songId || songmid,
+            name: nameValue,
+            singer: singerValue,
+            hash,
+            interval
+        };
         if (quality) songInfoForCache.quality = quality;
 
         const enableOnlyDownloadMode = window.settings?.enableOnlyDownloadMode || false;
 
-        await fetch(cacheUrl, {
+        const cacheRes = await fetch(cacheUrl, {
             method: 'POST',
             headers,
             body: JSON.stringify({
@@ -140,9 +279,13 @@ async function requestServerLyricCache(song, quality = null, force = false) {
                 enableOnlyDownloadMode
             })
         });
+        if (!cacheRes.ok) throw new Error('Lyric cache request failed');
         console.log(`[Lyric] 歌曲下载触发的歌词缓存同步成功: ${song.name} (仅下载模式: ${enableOnlyDownloadMode})`);
+        return true;
     } catch (e) {
         console.warn(`[Lyric] 自动同步歌词缓存失败: ${song.name}`, e);
+        if (force) throw e;
+        return false;
     }
 }
 
@@ -181,12 +324,8 @@ async function downloadSong(songOrId, forceQuality = null, suppressAlerts = fals
 
     if (selected === '浏览器下载') {
         if (window.SystemDownloadManager) {
-            const availableQualities = window.QualityManager ? window.QualityManager.getAvailableQualities(song) : ['128k'];
-            const qualityDisplayNames = availableQualities.map(q => {
-                const name = window.QualityManager ? window.QualityManager.getQualityDisplayName(q) : q;
-                const size = song._types?.[q]?.size || song.types?.find(t => t.type === q)?.size;
-                return size ? `${name} [${size}]` : name;
-            });
+            const availableQualities = getSelectableQualityOrder(song);
+            const qualityDisplayNames = await buildQualityOptionLabels(song, availableQualities);
             const selectedQualityDisplay = await showOptions('选择下载音质', `请选择对 [${song.name}] 的下载音质：`, qualityDisplayNames);
             if (!selectedQualityDisplay) return false;
 
@@ -219,13 +358,9 @@ async function downloadSong(songOrId, forceQuality = null, suppressAlerts = fals
         }
         let targetQuality = forceQuality;
         if (!targetQuality) {
-            // 获取该歌曲实际支持的音质列表
-            const availableQualities = window.QualityManager ? window.QualityManager.getAvailableQualities(song) : ['128k'];
-            const qualityDisplayNames = availableQualities.map(q => {
-                const name = window.QualityManager ? window.QualityManager.getQualityDisplayName(q) : q;
-                const size = song._types?.[q]?.size || song.types?.find(t => t.type === q)?.size;
-                return size ? `${name} [${size}]` : name;
-            });
+            // 收藏中的旧元数据可能缺少平台实际可解析的高音质。
+            const availableQualities = getSelectableQualityOrder(song);
+            const qualityDisplayNames = await buildQualityOptionLabels(song, availableQualities);
             const selectedQualityDisplay = await showOptions('选择缓存音质', `请选择对 [${song.name}] 的缓存音质：`, qualityDisplayNames);
             if (!selectedQualityDisplay) return false;
 
@@ -272,11 +407,116 @@ async function downloadSong(songOrId, forceQuality = null, suppressAlerts = fals
     return false;
 }
 
-// Batch download function
+// Batch download function shared by list selection and album downloads.
+async function batchDownloadSongs(songsToDownload, batchOptions = {}) {
+    if (!Array.isArray(songsToDownload) || songsToDownload.length === 0) {
+        showError(batchOptions.emptyMessage || '未找到要下载的歌曲');
+        return false;
+    }
+
+    const clearSelection = batchOptions.clearSelection !== false;
+    const selectionLabel = batchOptions.selectionLabel || `选择了 ${songsToDownload.length} 首歌曲`;
+    const targetOptions = ['浏览器下载', '缓存到服务器'];
+    const modeText = window.settings?.['enableOnlyDownloadMode'] ? '仅下载模式' : '缓存模式';
+    const selected = await showOptions('批量下载与缓存', `[${modeText}] ${selectionLabel}，请选择操作：`, targetOptions);
+
+    if (!selected) return false;
+
+    if (selected === '浏览器下载') {
+        if (window.SystemDownloadManager) {
+            // 使用全局音质优先级展示可选音质
+            const availableQualities = getSelectableQualityOrder();
+            const qualityDisplayNames = availableQualities.map(q => window.QualityManager ? window.QualityManager.getQualityDisplayName(q) : q);
+            const selectedQualityDisplay = await showOptions('选择下载音质', `请选择批量下载的音质：\n将优先请求所选音质，解析失败时按自动降级设置处理`, qualityDisplayNames);
+
+            if (!selectedQualityDisplay) return false;
+            const selectedQualityIndex = qualityDisplayNames.indexOf(selectedQualityDisplay);
+            const targetQuality = availableQualities[selectedQualityIndex];
+
+            const tasks = songsToDownload.map(s => ({
+                ...s,
+                quality: targetQuality
+            }));
+
+            await window.SystemDownloadManager.addTasks(tasks);
+
+            /* // [Removed] Delay until success
+            if (typeof settings !== 'undefined' && settings.enableServerLyricCache !== false) {
+                songsToDownload.forEach(s => {
+                    const actualQuality = window.QualityManager ? window.QualityManager.getBestQuality(s, targetQuality) : targetQuality;
+                    requestServerLyricCache(s, actualQuality);
+                });
+            }
+            */
+
+            showInfo(`已将 ${songsToDownload.length} 项任务添加到下载列表，您可以前往右侧下载管理面板查看进度`);
+            if (clearSelection) {
+                if (typeof exitBatchMode === 'function') exitBatchMode();
+                else if (typeof deselectAll === 'function') deselectAll();
+            }
+            return true;
+        } else {
+            showError('下载管理器未就绪');
+            return false;
+        }
+    } else if (selected === '缓存到服务器') {
+        // 使用全局音质优先级展示可选音质
+        const availableQualities = getSelectableQualityOrder();
+        const qualityDisplayNames = availableQualities.map(q => window.QualityManager ? window.QualityManager.getQualityDisplayName(q) : q);
+        const selectedQualityDisplay = await showOptions('选择全局缓存音质', `请选择批量请求服务器缓存的音质，下载歌曲的音质将取不超过该音质的最大音质`, qualityDisplayNames);
+
+        if (!selectedQualityDisplay) return false;
+        const selectedQualityIndex = qualityDisplayNames.indexOf(selectedQualityDisplay);
+        const targetQuality = availableQualities[selectedQualityIndex];
+
+        // [新增] 权限校验：受限公开用户需要验证管理员
+        const isPublic = !window.currentListData?.username || window.currentListData?.username === 'default';
+        const enablePublicRestriction = window.lx_config?.['user.enablePublicRestriction'];
+        const isAdmin = !!localStorage.getItem('lx_admin_password');
+        const isServerCacheAllowed = window.settings?.enableServerCache === true;
+        const isOnlyDownload = window.settings?.enableOnlyDownloadMode === true;
+
+        if (isPublic && enablePublicRestriction && !isServerCacheAllowed && !isAdmin && !isOnlyDownload) {
+            showError('权限限制：缓存到服务器需要验证管理员。');
+            if (typeof window.handleAdminAuth === 'function') {
+                const authorized = await window.handleAdminAuth('缓存到服务器需要验证管理员身份或开启仅下载模式');
+                if (!authorized) return false;
+            } else {
+                return false;
+            }
+        }
+
+        if (!window.SystemDownloadManager) {
+            showError('下载管理器未就绪');
+            return false;
+        }
+
+        // 1. 直接将歌曲注册到下载管理器，由其内部调度器控制并发
+        const tasks = songsToDownload.map(s => {
+            return {
+                ...s,
+                taskId: 'server_' + (s.id || s.songmid),
+                isServer: true,
+                quality: targetQuality // 调度器启动时会重新计算最佳音质
+            };
+        });
+        await window.SystemDownloadManager.addTasks(tasks);
+
+        if (clearSelection) {
+            if (typeof exitBatchMode === 'function') exitBatchMode();
+            else if (typeof deselectAll === 'function') deselectAll();
+        }
+        showInfo(`已将 ${songsToDownload.length} 首歌曲加入缓存队列`);
+        return true;
+    }
+
+    return false;
+}
+
 async function batchDownloadFromList() {
     if (selectedItems.size === 0) {
         showError('请先选择要下载的歌曲');
-        return;
+        return false;
     }
 
     // Convert IDs to Songs
@@ -303,99 +543,10 @@ async function batchDownloadFromList() {
 
     if (songsToDownload.length === 0) {
         showError('未找到选中歌曲的详细信息');
-        return;
+        return false;
     }
 
-    // Prompt user for download location
-    const options = ['浏览器下载', '缓存到服务器'];
-    const modeText = window.settings?.['enableOnlyDownloadMode'] ? '仅下载模式' : '缓存模式';
-    const selected = await showOptions('批量下载与缓存', `[${modeText}] 选择了 ${songsToDownload.length} 首歌曲，请选择操作：`, options);
-
-    if (!selected) return;
-
-    if (selected === '浏览器下载') {
-        if (window.SystemDownloadManager) {
-            // 固定显示四个标准音质
-            const availableQualities = window.QualityManager ? window.QualityManager.QUALITY_PRIORITY : ['flac24bit', 'flac', '320k', '128k'];
-            const qualityDisplayNames = availableQualities.map(q => window.QualityManager ? window.QualityManager.getQualityDisplayName(q) : q);
-            const selectedQualityDisplay = await showOptions('选择下载音质', `请选择批量下载的音质：\n下载歌曲的音质将取不超过该音质的最大音质`, qualityDisplayNames);
-
-            if (!selectedQualityDisplay) return;
-            const selectedQualityIndex = qualityDisplayNames.indexOf(selectedQualityDisplay);
-            const targetQuality = availableQualities[selectedQualityIndex];
-
-            const tasks = songsToDownload.map(s => {
-                // 计算该歌曲实际支持的最高音质（不超过用户选中的目标音质）
-                const actualQuality = window.QualityManager ? window.QualityManager.getBestQuality(s, targetQuality) : targetQuality;
-                return {
-                    ...s,
-                    quality: actualQuality
-                };
-            });
-
-            window.SystemDownloadManager.addTasks(tasks);
-
-            /* // [Removed] Delay until success
-            if (typeof settings !== 'undefined' && settings.enableServerLyricCache !== false) {
-                songsToDownload.forEach(s => {
-                    const actualQuality = window.QualityManager ? window.QualityManager.getBestQuality(s, targetQuality) : targetQuality;
-                    requestServerLyricCache(s, actualQuality);
-                });
-            }
-            */
-
-            showInfo(`已将 ${songsToDownload.length} 项任务添加到下载列表，您可以前往右侧下载管理面板查看进度`);
-            // Clean up selection optionally
-            if (typeof deselectAll === 'function') deselectAll();
-        } else {
-            showError('下载管理器未就绪');
-        }
-    } else if (selected === '缓存到服务器') {
-        // 固定显示四个标准音质
-        const availableQualities = window.QualityManager ? window.QualityManager.QUALITY_PRIORITY : ['flac24bit', 'flac', '320k', '128k'];
-        const qualityDisplayNames = availableQualities.map(q => window.QualityManager ? window.QualityManager.getQualityDisplayName(q) : q);
-        const selectedQualityDisplay = await showOptions('选择全局缓存音质', `请选择批量请求服务器缓存的音质，下载歌曲的音质将取不超过该音质的最大音质`, qualityDisplayNames);
-
-        if (!selectedQualityDisplay) return;
-        const selectedQualityIndex = qualityDisplayNames.indexOf(selectedQualityDisplay);
-        const targetQuality = availableQualities[selectedQualityIndex];
-
-        // [新增] 权限校验：受限公开用户需要验证管理员
-        const isPublic = !window.currentListData?.username || window.currentListData?.username === 'default';
-        const enablePublicRestriction = window.lx_config?.['user.enablePublicRestriction'];
-        const isAdmin = !!localStorage.getItem('lx_admin_password');
-        const isServerCacheAllowed = window.settings?.enableServerCache === true;
-        const isOnlyDownload = window.settings?.enableOnlyDownloadMode === true;
-
-        if (isPublic && enablePublicRestriction && !isServerCacheAllowed && !isAdmin && !isOnlyDownload) {
-            showError('权限限制：缓存到服务器需要验证管理员。');
-            if (typeof window.handleAdminAuth === 'function') {
-                const authorized = await window.handleAdminAuth('缓存到服务器需要验证管理员身份或开启仅下载模式');
-                if (!authorized) return;
-            } else {
-                return;
-            }
-        }
-
-        if (!window.SystemDownloadManager) {
-            showError('下载管理器未就绪');
-            return;
-        }
-
-        // 1. 直接将歌曲注册到下载管理器，由其内部调度器控制并发
-        const tasks = songsToDownload.map(s => {
-            return {
-                ...s,
-                taskId: 'server_' + (s.id || s.songmid),
-                isServer: true,
-                quality: targetQuality // 调度器启动时会重新计算最佳音质
-            };
-        });
-        window.SystemDownloadManager.addTasks(tasks);
-
-        if (typeof deselectAll === 'function') deselectAll();
-        showInfo(`已将 ${songsToDownload.length} 首歌曲加入缓存队列`);
-    }
+    return batchDownloadSongs(songsToDownload);
 }
 
 // Re-use helper functions from batch_pagination.js
@@ -420,5 +571,6 @@ function setListById(listId, newList) {
 // Export functions
 window.deleteSingleSong = deleteSingleSong;
 window.downloadSong = downloadSong;
+window.batchDownloadSongs = batchDownloadSongs;
 window.batchDownloadFromList = batchDownloadFromList;
 window.requestServerLyricCache = requestServerLyricCache;

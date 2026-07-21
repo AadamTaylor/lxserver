@@ -30,7 +30,7 @@ window.SongListManager = (function () {
     };
 
     // Initialize
-    function init() {
+    async function init() {
         console.log('[SongList] Initializing...');
 
         // 优先从缓存读取
@@ -42,7 +42,7 @@ window.SongListManager = (function () {
         }
 
         renderSortTabs();
-        loadTags();
+        await loadTags();
         loadList();
 
         // Bind events that might not be in HTML attributes
@@ -155,6 +155,9 @@ window.SongListManager = (function () {
             currentState.tags = data.tags || [];
             currentState.hotTags = data.hotTags || [];
             currentState.sortList = data.sortList || [];
+            if (currentState.sortList.length > 0 && !currentState.sortList.some(opt => String(opt.id) === String(currentState.sortId))) {
+                currentState.sortId = currentState.sortList[0].id;
+            }
             renderSortTabs();
             renderTags();
         } catch (e) {
@@ -552,7 +555,7 @@ window.SongListManager = (function () {
             toggleTagSelector(false);
             loadList(1);
         },
-        changeSource: function () {
+        changeSource: async function () {
             currentState.source = document.getElementById('songlist-source').value;
 
             // 保存到缓存
@@ -562,8 +565,10 @@ window.SongListManager = (function () {
             currentState.tagName = '全部分类';
             document.getElementById('current-tag-name').innerText = '全部分类';
             currentState.tags = [];
+            currentState.sortList = [];
+            currentState.sortId = '';
             renderSortTabs();
-            loadTags();
+            await loadTags();
             loadList(1);
         },
         changeSort: function (sort) {
@@ -815,5 +820,3 @@ function toggleSlDetailHeader() {
         icon.style.transform = 'rotate(180deg)';
     }
 }
-
-

@@ -61,7 +61,7 @@ export default {
                 img: item.info.img,
                 singer: item.info.author,
                 publishTime: item.info.publishTime,
-                total: item.total,
+                total: item.total || item.count || 0,
                 source: 'tx',
             }))
 

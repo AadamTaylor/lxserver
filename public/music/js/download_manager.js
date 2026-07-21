@@ -6,7 +6,7 @@
 class DownloadManager {
     constructor() {
         this.tasks = []; // Queue of tasks
-        this.maxConcurrent = window.settings?.downloadConcurrency || 3;
+        this.maxConcurrent = this.normalizeConcurrency(window.settings?.downloadConcurrency);
         this.activeCount = 0; // Currently active (local downloading + triggered server tasks)
 
         // UI Elements
@@ -14,6 +14,14 @@ class DownloadManager {
         this.listContainer = document.getElementById('download-list-container');
         this.globalSpeedEl = document.getElementById('download-global-speed');
         this.progressTextEl = document.getElementById('download-progress-text');
+        this.renderBuffer = 12;
+        this.estimatedTaskHeight = 92;
+        this.renderedRange = { start: 0, end: 0 };
+        this.scrollRenderRaf = null;
+        this.serverPollInFlight = false;
+        this.serverQueueSyncInFlight = false;
+        this.serverQueuePending = false;
+        this.serverQueueLoaded = false;
 
         // Speed calculation
         this.lastTotalBytes = 0;
@@ -23,39 +31,354 @@ class DownloadManager {
         // [New] Poll for server-side caching progress
         this.serverPollInterval = setInterval(() => this.pollServerProgress(), 2000);
 
+        if (this.listContainer) {
+            this.listContainer.addEventListener('scroll', () => this.scheduleScrollRender());
+        }
+
         // Restore tasks from sessionStorage
         this.restoreTasks();
+        setTimeout(() => this.syncServerConcurrency(), 300);
+        setTimeout(() => this.syncServerQueue(true), 500);
+    }
+
+    async mapWithConcurrency(items, limit, mapper) {
+        const results = new Array(items.length);
+        let nextIndex = 0;
+        const workerCount = Math.min(limit, items.length);
+        const workers = Array.from({ length: workerCount }, async () => {
+            while (nextIndex < items.length) {
+                const index = nextIndex++;
+                results[index] = await mapper(items[index], index);
+            }
+        });
+        await Promise.all(workers);
+        return results;
+    }
+
+    extractRawDownloadUrl(url) {
+        if (!url) return url;
+        try {
+            const parsedUrl = new URL(url, window.location.origin);
+            if (parsedUrl.origin !== window.location.origin || parsedUrl.pathname !== '/api/music/download') return url;
+            const proxyParams = parsedUrl.searchParams;
+            const extracted = proxyParams.get('url');
+            if (!extracted) return url;
+            if (extracted.startsWith('http')) return extracted;
+            const decoded = decodeURIComponent(extracted);
+            return decoded.startsWith('http') ? decoded : extracted;
+        } catch (e) {
+            return url;
+        }
+    }
+
+    shouldUseNativeDownload(batchSize, quality) {
+        const memoryHeavyQualities = ['flac', 'flac24bit', 'hires', 'atmos', 'atmos_plus', 'master'];
+        return batchSize > 1 || memoryHeavyQualities.includes(quality);
+    }
+
+    triggerNativeDownload(url, filename) {
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        link.rel = 'noopener';
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+    }
+
+    getDownloadExtension(url, quality) {
+        try {
+            const pathname = new URL(url, window.location.origin).pathname;
+            const match = pathname.match(/\.([a-z0-9]{2,5})$/i);
+            if (match && ['mp3', 'flac', 'm4a', 'ogg', 'wav', 'ape'].includes(match[1].toLowerCase())) {
+                return match[1].toLowerCase();
+            }
+        } catch (e) { }
+
+        if (quality === '128k' || quality === '192k' || quality === '320k') return 'mp3';
+        if (quality === 'atmos' || quality === 'atmos_plus') return 'm4a';
+        if (['flac', 'flac24bit', 'hires', 'master'].includes(quality)) return 'flac';
+        return 'mp3';
     }
 
     // Update max concurrency limit dynamically
     updateMaxConcurrent(value) {
-        console.log('[DownloadManager] Concurrency limit updated to:', value);
-        this.maxConcurrent = value;
+        this.maxConcurrent = this.normalizeConcurrency(value);
+        console.log('[DownloadManager] Concurrency limit updated to:', this.maxConcurrent);
+        this.syncServerConcurrency();
         this.processQueue();
     }
 
+    async syncServerConcurrency() {
+        try {
+            await this.requestServerQueue('/api/music/cache/queue/concurrency', { concurrency: this.maxConcurrent });
+        } catch (error) {
+            console.warn('[DownloadManager] Failed to sync server concurrency:', error);
+        }
+    }
+
+    normalizeConcurrency(value) {
+        const parsed = parseInt(value, 10);
+        if (!Number.isFinite(parsed)) return 3;
+        return Math.min(5, Math.max(1, parsed));
+    }
+
+    getDownloadResolver() {
+        return window.resolveDownloadSongUrl || window.resolveSongUrl;
+    }
+
+    getServerQueueHeaders() {
+        return { 'Content-Type': 'application/json', ...(window.getUserAuthHeaders ? window.getUserAuthHeaders() : {}) };
+    }
+
+    async requestServerQueue(path, body) {
+        const options = { method: body === undefined ? 'GET' : 'POST', headers: this.getServerQueueHeaders() };
+        if (body !== undefined) options.body = JSON.stringify(body);
+        const response = await fetch(path, options);
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || result.success === false) throw new Error(result.message || `HTTP ${response.status}`);
+        return result.data;
+    }
+
+    async enqueueServerTasks(tasks) {
+        if (!tasks.length) return;
+        this.serverQueuePending = true;
+        try {
+            const headers = this.getServerQueueHeaders();
+            const payload = {
+                concurrency: this.maxConcurrent,
+                tasks: tasks.map(task => ({
+                    id: task.id,
+                    songInfo: this.getSongInfoForServer(task.song),
+                    quality: task.quality,
+                    enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false,
+                    cacheLyric: window.settings?.enableServerLyricCache !== false,
+                    embedLyric: !!(window.settings?.embedLyricToFile ?? true)
+                }))
+            };
+            if (headers['x-frontend-auth'] && window.settings?.serverCacheNamingPattern) {
+                payload.namingPattern = window.settings.serverCacheNamingPattern;
+            }
+            await this.requestServerQueue('/api/music/cache/queue', payload);
+            tasks.forEach(task => {
+                task.serverManaged = true;
+                task.serverQueueRegistered = true;
+                task.serverQueueId = task.id;
+                task.status = 'waiting';
+                task.errorMsg = '';
+            });
+            await this.syncServerQueue(true);
+        } catch (error) {
+            tasks.forEach(task => {
+                task.serverQueueRegistered = false;
+                task.status = 'error';
+                task.errorMsg = error.message || '服务器队列登记失败';
+            });
+            this.renderList();
+            this.saveTasks();
+        } finally {
+            this.serverQueuePending = false;
+        }
+    }
+
+    async syncServerQueue(render = false) {
+        if (this.serverQueueSyncInFlight) return;
+        this.serverQueueSyncInFlight = true;
+        try {
+            const items = await this.requestServerQueue('/api/music/cache/queue');
+            if (!Array.isArray(items)) return;
+            const remoteIds = new Set();
+            const updatedTasks = [];
+            items.forEach(item => {
+                remoteIds.add(item.id);
+                let task = this.tasks.find(t => t.isServer && (t.serverQueueId === item.id || t.id === item.id));
+                if (!task) {
+                    task = {
+                        id: item.id,
+                        song: item.songInfo || {},
+                        isServer: true,
+                        serverManaged: true,
+                        serverQueueRegistered: true,
+                        serverQueueId: item.id,
+                        serverSongKey: item.songKey || '',
+                        quality: item.quality || item.requestedQuality || '',
+                        status: item.status || 'waiting',
+                        progress: item.progress || 0,
+                        downloadedBytes: item.received || 0,
+                        totalBytes: item.total || 0,
+                        speed: item.speed || 0,
+                        errorMsg: item.errorMsg || '',
+                        retryCount: 0,
+                        maxRetries: 2,
+                        controller: null
+                    };
+                    this.tasks.push(task);
+                } else {
+                    task.song = item.songInfo || task.song;
+                    task.serverManaged = true;
+                    task.serverQueueRegistered = true;
+                    task.serverQueueId = item.id;
+                    task.serverSongKey = item.songKey || task.serverSongKey;
+                    task.quality = item.quality || task.quality;
+                    task.status = item.status || task.status;
+                    task.progress = item.progress || 0;
+                    task.downloadedBytes = item.received || 0;
+                    task.totalBytes = item.total || 0;
+                    task.speed = item.speed || 0;
+                    task.errorMsg = item.errorMsg || '';
+                }
+                updatedTasks.push(task);
+            });
+            if (!this.serverQueuePending) {
+                this.tasks = this.tasks.filter(task => !task.serverManaged || remoteIds.has(task.serverQueueId || task.id));
+            }
+            this.serverQueueLoaded = true;
+            if (render) this.renderList();
+            else updatedTasks.forEach(task => this.renderTask(task));
+            this.saveTasks();
+        } catch (error) {
+            console.warn('[DownloadManager] Failed to sync server queue:', error);
+        } finally {
+            this.serverQueueSyncInFlight = false;
+        }
+    }
+
+    normalizeServerSongId(songInfo) {
+        let id = String(songInfo?.songmid || songInfo?.songId || songInfo?.id || '');
+        const source = songInfo?.source || 'unknown';
+        if (id && !id.includes('_') && source !== 'unknown') {
+            id = `${source}_${id}`;
+        }
+        return id;
+    }
+
+    getSongIdentity(songInfo) {
+        const meta = songInfo?.meta || {};
+        const source = songInfo?.source || meta.source || 'unknown';
+        const id = songInfo?.songmid || songInfo?.songId || meta.songmid || meta.songId ||
+            songInfo?.id || songInfo?.hash || songInfo?.copyrightId || songInfo?.mid ||
+            songInfo?.mediaMid || songInfo?.strMediaMid;
+        if (id !== undefined && id !== null && id !== '') return `${source}:${id}`;
+
+        return `${source}:${songInfo?.name || ''}:${songInfo?.singer || ''}:${songInfo?.albumName || ''}:${songInfo?.interval || ''}`;
+    }
+
+    getServerSongKey(songInfo, quality) {
+        return `${this.normalizeServerSongId(songInfo)}_${quality || 'unknown'}`;
+    }
+
+    getTaskServerSongKey(task) {
+        if (!task) return '';
+        if (task.serverSongKey) return task.serverSongKey;
+        const key = this.getServerSongKey(task.song || {}, task.quality);
+        if (key && !key.startsWith('_')) return key;
+        return task.id ? task.id.replace(/^server_(batch_)?/, '') : '';
+    }
+
+    createTaskId(prefix = 'dl') {
+        const cryptoObj = window.crypto || window.msCrypto;
+        if (cryptoObj?.randomUUID) return `${prefix}_${cryptoObj.randomUUID()}`;
+        return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    }
+
+    async waitForDownloadResolver(timeoutMs = 10000) {
+        const resolver = this.getDownloadResolver();
+        if (typeof resolver === 'function') return resolver;
+
+        const startedAt = Date.now();
+        return new Promise((resolve, reject) => {
+            const timer = setInterval(() => {
+                const currentResolver = this.getDownloadResolver();
+                if (typeof currentResolver === 'function') {
+                    clearInterval(timer);
+                    resolve(currentResolver);
+                    return;
+                }
+                if (Date.now() - startedAt >= timeoutMs) {
+                    clearInterval(timer);
+                    reject(new Error('resolveSongUrl missing'));
+                }
+            }, 50);
+        });
+    }
+
+    shouldAutoSyncLyric(task) {
+        return !!(
+            task &&
+            task.isServer &&
+            task.status === 'finished' &&
+            window.requestServerLyricCache &&
+            window.settings?.enableServerLyricCache !== false &&
+            window.settings?.enableOnlyDownloadMode !== true
+        );
+    }
+
+    completeServerTask(task, status = 'finished') {
+        task.status = status;
+        task.progress = 100;
+        task.errorMsg = '';
+        task.speed = 0;
+
+        if (this.shouldAutoSyncLyric(task)) {
+            window.requestServerLyricCache(task.song, task.quality).then((synced) => {
+                if (synced) setTimeout(() => this.checkTaskLyric(task), 2000);
+            });
+        }
+
+        this.renderTask(task);
+        this.saveTasks();
+        this.processQueue();
+    }
+
+    async refreshMissingServerTask(task) {
+        if (task.cacheRecheckPending) return;
+        task.cacheRecheckPending = true;
+        try {
+            const checker = window.checkServerCache || (typeof checkServerCache === 'function' ? checkServerCache : null);
+            const check = checker ? await checker(task.song, task.quality, true) : null;
+            if (check && check.exists && !check.isCollision) {
+                this.completeServerTask(task, 'finished');
+            } else if (task.isServer && task.status === 'downloading' && (task.missingProgressCount || 0) >= 6) {
+                task.status = 'waiting';
+                task.progress = 0;
+                task.downloadedBytes = 0;
+                task.totalBytes = 0;
+                task.speed = 0;
+                task.errorMsg = '';
+                task.missingProgressCount = 0;
+                this.renderTask(task);
+                this.saveTasks();
+                this.processQueue();
+            }
+        } catch (e) {
+            console.warn('[DownloadManager] Missing progress cache recheck failed:', task.id, e);
+        } finally {
+            task.cacheRecheckPending = false;
+        }
+    }
+
     async pollServerProgress() {
+        if (this.serverPollInFlight) return;
+        this.serverPollInFlight = true;
+        try {
+        await this.syncServerQueue(false);
         // [Move to top] 对已完成但还未检测过歌词的云端任务，执行检测
         // 这样即使当前没有正在下载的任务，刷新页面后也能触发一次歌词状态刷新
-        this.tasks.filter(t => t.isServer && t.status === 'finished' && t.hasLyric === undefined).forEach(t => {
+        this.tasks.filter(t => t.isServer && t.status === 'finished' && t.hasLyric === undefined).slice(0, 3).forEach(t => {
             t.hasLyric = 'checking';
             this.checkTaskLyric(t);
         });
 
         // Poll for server tasks AND local proxy tasks
-        const tasksToPoll = this.tasks.filter(t => (t.isServer || (t.status === 'downloading' && !t.isServer)) && (t.status === 'waiting' || t.status === 'downloading'));
+        const tasksToPoll = this.tasks.filter(t => !t.serverManaged && (t.isServer || (t.status === 'downloading' && !t.isServer)) && (t.status === 'waiting' || t.status === 'downloading' || t.status === 'tagging'));
         if (tasksToPoll.length === 0) return;
 
         // Map task IDs to names/keys the server uses
         const idMap = {};
         tasksToPoll.forEach(t => {
             if (t.isServer) {
-                // Ensure rawId matches backend normalization: {source}_{id}_{quality}
-                let songId = t.song.songmid || t.song.id;
-                if (songId && !String(songId).includes('_') && t.song.source) {
-                    songId = `${t.song.source}_${songId}`;
-                }
-                const rawId = `${songId}_${t.quality || 'unknown'}`;
+                const rawId = this.getTaskServerSongKey(t);
                 idMap[rawId] = t.id;
             } else {
                 // Local proxy download uses taskId directly
@@ -63,12 +386,25 @@ class DownloadManager {
             }
         });
 
-        const ids = Object.keys(idMap).join(',');
+        const ids = Object.keys(idMap);
+        const batchSize = 60;
         try {
-            const resp = await fetch(`/api/music/cache/progress?ids=${encodeURIComponent(ids)}`);
-            const result = await resp.json();
-            if (result.success) {
-                const data = result.data;
+            const batches = [];
+            for (let i = 0; i < ids.length; i += batchSize) {
+                batches.push(ids.slice(i, i + batchSize));
+            }
+
+            const batchResults = await Promise.all(batches.map(async (batch) => {
+                try {
+                    const resp = await fetch(`/api/music/cache/progress?ids=${encodeURIComponent(batch.join(','))}`);
+                    const result = await resp.json();
+                    return result.success ? (result.data || {}) : {};
+                } catch (e) {
+                    console.warn('[DownloadManager] Batch progress poll failed:', e);
+                    return {};
+                }
+            }));
+            const data = Object.assign({}, ...batchResults);
 
                 // 处理有进度数据的任务
                 Object.keys(data).forEach(rawId => {
@@ -87,7 +423,9 @@ class DownloadManager {
                         }
 
                         // Calculate speed for polled tasks
-                        if (task.lastPolledBytes !== undefined && task.lastPolledTime !== undefined) {
+                        if (typeof progressInfo.speed === 'number') {
+                            task.speed = Math.max(0, progressInfo.speed);
+                        } else if (task.lastPolledBytes !== undefined && task.lastPolledTime !== undefined) {
                             const now = Date.now();
                             const elapsed = (now - task.lastPolledTime) / 1000;
                             if (elapsed > 0) {
@@ -98,25 +436,28 @@ class DownloadManager {
                         task.lastPolledBytes = progressInfo.received || 0;
                         task.lastPolledTime = Date.now();
 
-                        task.status = (progressInfo.status === 'finished' || progressInfo.status === 'exists') ? progressInfo.status : 'downloading';
+                        if (progressInfo.status === 'error') {
+                            task.status = 'error';
+                            task.progress = progressInfo.progress || 0;
+                            task.errorMsg = progressInfo.errorMsg || '服务器下载失败';
+                            task.speed = 0;
+                            this.renderTask(task);
+                            this.saveTasks();
+                            this.processQueue();
+                            return;
+                        }
+
+                        task.status = progressInfo.status === 'tagging'
+                            ? 'tagging'
+                            : ((progressInfo.status === 'finished' || progressInfo.status === 'exists') ? progressInfo.status : 'downloading');
                         task.progress = progressInfo.progress || 0;
                         task.downloadedBytes = progressInfo.received || 0;
                         task.totalBytes = progressInfo.total || 0;
+                        task.missingProgressCount = 0;
 
-                        if (progressInfo.status === 'tagging' || progressInfo.status === 'finished' || progressInfo.status === 'exists') {
-                            if (progressInfo.status === 'tagging') task.status = 'finished';
-                            task.progress = 100;
-                            task.errorMsg = '';
-                            // 成功完成后触发歌词同步（补充）
-                            if (window.requestServerLyricCache && task.status === 'finished') {
-                                window.requestServerLyricCache(task.song, task.quality).then(() => {
-                                    // 延时一下再检查，确保后端写入完成
-                                    setTimeout(() => this.checkTaskLyric(task), 2000);
-                                });
-                            }
-                            this.saveTasks();
-                            // If it just finished, free up the slot
-                            this.processQueue();
+                        if (progressInfo.status === 'finished' || progressInfo.status === 'exists') {
+                            this.completeServerTask(task, progressInfo.status === 'exists' ? 'exists' : 'finished');
+                            return;
                         } else {
                             task.errorMsg = '';
                         }
@@ -126,7 +467,7 @@ class DownloadManager {
 
                 // [Fix] 处理没有进度数据的任务：key 已被删除 = 下载完成或从未开始
                 tasksToPoll.forEach(task => {
-                    const rawId = task.isServer ? task.id.replace(/^server_(batch_)?/, '') : task.id;
+                    const rawId = task.isServer ? this.getTaskServerSongKey(task) : task.id;
                     if (data[rawId] === undefined && (task.status === 'downloading' || task.status === 'tagging')) {
                         // 没有进度条目 + 状态是 downloading/tagging
                         // → 如果之前进度很高或在嵌入中，说明已从内存队列移除，逻辑上视为已完成
@@ -136,23 +477,39 @@ class DownloadManager {
                             task.progress = 100;
                             task.errorMsg = '';
                             task.speed = 0;
+                            task.missingProgressCount = 0;
 
                             // 成功完成后触发歌词同步（补充）
-                            if (window.requestServerLyricCache) {
-                                window.requestServerLyricCache(task.song, task.quality).then(() => {
-                                    setTimeout(() => this.checkTaskLyric(task), 2000);
+                            if (this.shouldAutoSyncLyric(task)) {
+                                window.requestServerLyricCache(task.song, task.quality).then((synced) => {
+                                    if (synced) setTimeout(() => this.checkTaskLyric(task), 2000);
                                 });
                             }
 
                             this.renderTask(task);
                             this.saveTasks();
                             this.processQueue();
+                        } else if (task.isServer) {
+                            task.missingProgressCount = (task.missingProgressCount || 0) + 1;
+                            this.refreshMissingServerTask(task);
+                        } else if (task.nativeDownloadDispatched) {
+                            task.missingProgressCount = (task.missingProgressCount || 0) + 1;
+                            if (task.missingProgressCount >= 6) {
+                                task.status = 'error';
+                                task.speed = 0;
+                                task.errorMsg = '浏览器未启动下载';
+                                this.renderTask(task);
+                                this.saveTasks();
+                                this.processQueue();
+                            }
                         }
                     }
                 });
-            }
         } catch (e) {
             console.error('[DownloadManager] Server poll error:', e);
+        }
+        } finally {
+            this.serverPollInFlight = false;
         }
     }
 
@@ -161,15 +518,18 @@ class DownloadManager {
         if (!task || !task.isServer || task.status !== 'finished') return;
 
         // [优化] 如果已经有结果，或者重试超过 3 次，则不再请求
-        if (task.hasLyric !== undefined || (task.lyricRetryCount || 0) >= 3) return;
+        if ((task.hasLyric === true || task.hasLyric === false) || (task.lyricRetryCount || 0) >= 3) return;
 
         try {
             // 记录重试次数
             task.lyricRetryCount = (task.lyricRetryCount || 0) + 1;
 
-            const song = task.song;
-            const songId = song.songmid || song.songId || song.id;
-            const url = `/api/music/cache/lyric?source=${song.source}&songmid=${song.songmid || ''}&songId=${song.id || ''}`;
+            const song = task.song || {};
+            const meta = song.meta || {};
+            const source = song.source || meta.source || '';
+            const songmid = song.songmid || song.songId || meta.songmid || meta.songId || song.id || '';
+            const songId = song.id || song.songId || meta.songId || songmid;
+            const url = `/api/music/cache/lyric?source=${encodeURIComponent(source)}&songmid=${encodeURIComponent(songmid)}&songId=${encodeURIComponent(songId || '')}&name=${encodeURIComponent(song.name || meta.songName || '')}&singer=${encodeURIComponent(song.singer || meta.singerName || '')}`;
 
             // [修复] 补全认证请求头
             const headers = {
@@ -208,7 +568,8 @@ class DownloadManager {
             this.renderTask(task);
 
             try {
-                await window.requestServerLyricCache(task.song, task.quality, true); // 强制补全
+                const synced = await window.requestServerLyricCache(task.song, task.quality, true); // 强制补全
+                if (!synced) throw new Error('No lyric data available');
                 if (window.showSuccess) window.showSuccess(`已成功补全歌词: ${task.song.name}`);
                 // 再次检查
                 setTimeout(() => this.checkTaskLyric(task), 1500);
@@ -271,6 +632,48 @@ class DownloadManager {
             '/music/assets/logo.svg';
     }
 
+    getSongInfoForServer(song) {
+        const cover = this.getSongCover(song);
+        const normalizedCover = cover && cover !== '/music/assets/logo.svg' ? cover : '';
+        return {
+            ...song,
+            img: song.img || normalizedCover,
+            meta: {
+                ...(song.meta || {}),
+                picUrl: song.meta?.picUrl || normalizedCover
+            }
+        };
+    }
+
+    getSongInfoForStorage(song) {
+        if (!song) return {};
+        return {
+            id: song.id,
+            songmid: song.songmid,
+            songId: song.songId,
+            source: song.source,
+            name: song.name,
+            singer: song.singer,
+            albumName: song.albumName,
+            albumId: song.albumId,
+            albumMid: song.albumMid,
+            interval: song.interval,
+            img: song.img,
+            types: song.types,
+            _types: song._types,
+            strMediaMid: song.strMediaMid,
+            hash: song.hash,
+            meta: song.meta ? {
+                songmid: song.meta.songmid,
+                songId: song.meta.songId,
+                source: song.meta.source,
+                picUrl: song.meta.picUrl,
+                singerName: song.meta.singerName,
+                songName: song.meta.songName
+            } : undefined
+        };
+    }
+
     // [Unified] Status generator for drawer lists
     getStatusHtml(icon, text, isSpin = false) {
         return `
@@ -285,19 +688,22 @@ class DownloadManager {
     async addTasks(songs) {
         if (!songs || songs.length === 0) return;
 
-        // Parallelize cache checks for performance
-        const results = await Promise.all(songs.map(async (song) => {
+        // Keep large batches responsive by limiting concurrent preflight requests.
+        const results = await this.mapWithConcurrency(songs, 8, async (song) => {
             const targetPref = song.quality || window.settings?.preferredQuality || '320k';
-            const quality = window.QualityManager ? window.QualityManager.getBestQuality(song, targetPref) : targetPref;
+            const quality = song.quality || (window.QualityManager ? window.QualityManager.getBestQuality(song, targetPref) : targetPref);
             const cacheResult = await checkServerCache(song, quality, true);
             return { song, quality, cacheResult };
-        }));
+        });
 
         let skipCount = 0;
+        const addedServerTasks = [];
         for (const { song, quality, cacheResult } of results) {
             const isServerTask = song.isServer || false;
             if (cacheResult.exists && !cacheResult.isCollision) {
-                if (isServerTask) { // [Fix] 只有明确是“云端缓存”的任务才跳过已存在的
+                const onlyDownloadMode = window.settings?.enableOnlyDownloadMode === true;
+                const targetAlreadyExists = !onlyDownloadMode || cacheResult.folder === 'music';
+                if (isServerTask && targetAlreadyExists) { // 仅下载模式下 cache 命中仍需交给后端复制到 music 目录
                     skipCount++;
                     continue;
                 }
@@ -305,19 +711,27 @@ class DownloadManager {
             }
 
             // Check if already in queue (with same quality)
-            const existing = this.tasks.find(t => t.song.id === song.id && t.quality === quality && (t.status === 'waiting' || t.status === 'downloading'));
+            const songIdentity = this.getSongIdentity(song);
+            const existing = this.tasks.find(t =>
+                this.getSongIdentity(t.song) === songIdentity &&
+                t.quality === quality &&
+                (t.status === 'waiting' || t.status === 'starting' || t.status === 'downloading' || t.status === 'tagging')
+            );
             if (!existing) {
-                // For server tasks, FORCE a deterministic ID that matches backend track key normalization: {source}_{id}_{quality}
-                let rawId = song.songmid || song.id;
-                if (rawId && !String(rawId).includes('_') && song.source) {
-                    rawId = `${song.source}_${rawId}`;
-                }
-                const taskId = isServerTask ? `server_${rawId}_${quality}` : (song.taskId || `dl_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`);
+                const serverSongKey = isServerTask ? this.getServerSongKey(song, quality) : null;
+                const taskId = song.taskId || this.createTaskId(isServerTask ? 'server' : 'dl');
+                const useNativeDownload = !isServerTask && this.shouldUseNativeDownload(songs.length, quality);
 
-                this.tasks.push({
+                const task = {
                     id: taskId,
                     song: song,
                     isServer: isServerTask,
+                    serverManaged: isServerTask,
+                    serverQueueRegistered: false,
+                    serverQueueId: isServerTask ? taskId : null,
+                    useNativeDownload,
+                    nativeDownloadDispatched: false,
+                    serverSongKey,
                     quality: quality,
                     status: 'waiting',
                     errorMsg: '',
@@ -330,7 +744,9 @@ class DownloadManager {
                     controller: null,
                     collisionInfo: cacheResult.isCollision ? cacheResult : null,
                     cacheUrl: cacheResult.exists ? cacheResult.url : null // [新增] 保存缓存地址
-                });
+                };
+                this.tasks.push(task);
+                if (isServerTask) addedServerTasks.push(task);
             }
         }
 
@@ -338,7 +754,7 @@ class DownloadManager {
             window.showInfo(`${skipCount} 首歌曲已存在，已跳过`);
         }
 
-        // Auto open drawer if needed
+        // Auto open drawer; renderList only paints the first visible slice for large batches.
         if (this.drawer && this.drawer.classList.contains('translate-x-full')) {
             this.toggleDrawer();
         }
@@ -346,31 +762,32 @@ class DownloadManager {
         this.renderList();
         this.processQueue();
         this.saveTasks();
+        await this.enqueueServerTasks(addedServerTasks);
     }
 
     // Process the queue based on concurrency limits
     processQueue() {
         // Recalculate true active count including triggered server tasks
         const localActive = this.tasks.filter(t => !t.isServer && t.status === 'downloading').length;
-        const serverActive = this.tasks.filter(t => t.isServer && (t.status === 'downloading' || t.status === 'tagging')).length;
+        const serverActive = this.tasks.filter(t => t.isServer && !t.serverManaged && (t.status === 'downloading' || t.status === 'tagging')).length;
         this.activeCount = localActive + serverActive;
 
-        if (this.activeCount >= this.maxConcurrent) {
-            this.renderList();
-            this.updateGlobalProgress();
-            return;
-        }
-
-        // Find next task (could be local or server)
-        const nextTask = this.tasks.find(t => t.status === 'waiting');
-        if (nextTask) {
+        while (this.activeCount < this.maxConcurrent) {
+            const nextTask = this.tasks.find(t => t.status === 'waiting' && !t.serverManaged);
+            if (!nextTask) break;
+            if (nextTask.useNativeDownload && this.activeCount > 0) break;
+            if (typeof this.getDownloadResolver() !== 'function') {
+                setTimeout(() => this.processQueue(), 100);
+                break;
+            }
+            nextTask.status = 'starting';
+            this.activeCount++;
             if (nextTask.isServer) {
                 this.startServerDownload(nextTask);
             } else {
                 this.startDownload(nextTask);
             }
-            // Recurse to fill other slots
-            this.processQueue();
+            if (nextTask.useNativeDownload) break;
         }
         this.renderList();
         this.updateGlobalProgress();
@@ -382,42 +799,51 @@ class DownloadManager {
         this.renderTask(task);
 
         try {
-            if (typeof resolveSongUrl !== 'function') throw new Error('resolveSongUrl missing');
+            const downloadResolver = await this.waitForDownloadResolver();
 
             // 1. Resolve URL
-            const quality = task.quality || (window.QualityManager ? window.QualityManager.getBestQuality(task.song, window.settings?.preferredQuality || '320k') : '320k');
-            task.quality = quality;
+            const requestedQuality = task.quality || (window.QualityManager ? window.QualityManager.getBestQuality(task.song, window.settings?.preferredQuality || '320k') : '320k');
+            task.quality = requestedQuality;
 
-            const result = await resolveSongUrl(task.song, quality, true, true);
+            const result = await downloadResolver(task.song, requestedQuality, true);
             if (!result || !result.url) throw new Error('解析失败');
 
-
-            let rawUrl = result.url;
-            if (rawUrl.startsWith('/api/music/download')) {
-                const proxyParams = new URLSearchParams(rawUrl.includes('?') ? rawUrl.split('?')[1] : '');
-                const extracted = proxyParams.get('url');
-                if (extracted) rawUrl = decodeURIComponent(extracted);
+            const resolvedSong = result.songInfo || task.song;
+            const resolvedQuality = result.quality || result.type || requestedQuality;
+            if (resolvedSong !== task.song) {
+                task.song = resolvedSong;
             }
+            task.quality = resolvedQuality;
+            task.serverSongKey = this.getServerSongKey(resolvedSong, resolvedQuality);
+            this.renderTask(task);
+
+            let rawUrl = this.extractRawDownloadUrl(result.url);
             if (!rawUrl.startsWith('http')) throw new Error('无法获取有效的外部下载地址');
 
             // 2. Post to backend
             const headers = { 'Content-Type': 'application/json', ...(window.getUserAuthHeaders ? window.getUserAuthHeaders() : {}) };
+            const payload = {
+                songInfo: this.getSongInfoForServer(resolvedSong),
+                url: rawUrl,
+                quality: resolvedQuality,
+                enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false,
+                cacheLyric: window.settings?.enableServerLyricCache !== false,
+                embedLyric: !!(window.settings?.embedLyricToFile ?? true)
+            };
+            if (window.settings?.serverCacheNamingPattern && headers['x-frontend-auth']) {
+                payload.namingPattern = window.settings.serverCacheNamingPattern;
+            }
 
             const res = await fetch('/api/music/cache/download', {
                 method: 'POST',
                 headers,
-                body: JSON.stringify({ 
-                    songInfo: task.song, 
-                    url: rawUrl, 
-                    quality, 
-                    enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false,
-                    embedLyric: !!(window.settings?.embedLyricToFile ?? true)
-                })
+                body: JSON.stringify(payload)
             });
 
             if (!res.ok) throw new Error('服务器拒绝缓存');
 
             // Success: pollServerProgress will now handle its movement
+            this.saveTasks();
             console.log(`[DownloadManager] Server task started: ${task.song.name}`);
         } catch (e) {
             console.warn('[DownloadManager] Failed to start server task:', task.id, e);
@@ -457,32 +883,22 @@ class DownloadManager {
                     finalUrl += (finalUrl.includes('?') ? '&' : '?') + `token=${encodeURIComponent(authToken)}`;
                 }
 
-                // 推断后缀
-                try {
-                    const urlObj = new URL(finalUrl, window.location.origin);
-                    const path = urlObj.pathname;
-                    if (path.includes('.')) ext = path.split('.').pop();
-                } catch (e) { }
+                ext = this.getDownloadExtension(finalUrl, quality);
             } else {
-                // 2. 无缓存，向原站解析 URL
-                const headers = { 'Content-Type': 'application/json', ...(window.getUserAuthHeaders ? window.getUserAuthHeaders() : {}) };
+                const downloadResolver = await this.waitForDownloadResolver();
+                const resolveData = await downloadResolver(task.song, quality, true);
+                if (!resolveData || !resolveData.url) throw new Error('No download URL found');
 
-                const resolveRes = await fetch('/api/music/url', {
-                    method: 'POST',
-                    headers,
-                    body: JSON.stringify({ songInfo: task.song, quality }),
-                    signal: task.controller.signal
-                });
-
-                if (!resolveRes.ok) throw new Error('Failed to resolve URL');
-                const resolveData = await resolveRes.json();
-
-                if (!resolveData.url) throw new Error('No download URL found');
+                const resolvedSong = resolveData.songInfo || task.song;
+                const resolvedQuality = resolveData.quality || resolveData.type || quality;
+                if (resolvedSong !== task.song) {
+                    task.song = resolvedSong;
+                }
+                task.quality = resolvedQuality;
+                this.renderTask(task);
 
                 finalUrl = resolveData.url;
-                ext = resolveData.type || 'mp3';
-                if (ext.startsWith('flac')) ext = 'flac'; // Handle flac24bit -> flac
-                if (ext === '128k' || ext === '320k') ext = 'mp3';
+                ext = this.getDownloadExtension(finalUrl, resolvedQuality);
             }
 
             // Determine filename with collision handling
@@ -508,6 +924,7 @@ class DownloadManager {
 
             // [优化] 如果是本地缓存文件，不需要经过下载代理（已经有标签了）
             const isLocalCache = finalUrl.startsWith('/api/music/cache/file');
+            finalUrl = this.extractRawDownloadUrl(finalUrl);
 
             if (shouldProxyDownload && !finalUrl.startsWith('/api/music/download') && !isLocalCache) {
                 // Add metadata for tagging — 用 albumName 优先（playlist 字段），album 为兼容备选
@@ -537,6 +954,19 @@ class DownloadManager {
                 console.log('[DownloadManager] Download with metadata proxy:', finalUrl);
             } else {
                 console.log('[DownloadManager] Simple download:', finalUrl);
+            }
+
+            if (task.useNativeDownload) {
+                if (task.controller.signal.aborted) throw new DOMException('Download paused', 'AbortError');
+                this.triggerNativeDownload(finalUrl, filename);
+                task.nativeDownloadDispatched = true;
+                task.status = 'downloading';
+                task.progress = 0;
+                task.speed = 0;
+                task.controller = null;
+                this.renderTask(task);
+                this.saveTasks();
+                return;
             }
 
             // 2. Fetch the actual file using Streams to track progress
@@ -621,6 +1051,7 @@ class DownloadManager {
             this.activeCount--;
             if (task.controller && task.controller.signal.aborted) {
                 task.status = 'paused';
+                task.speed = 0;
                 task.errorMsg = '已暂停';
             } else {
                 console.error(`Download error for ${task.song.name}:`, error);
@@ -663,18 +1094,22 @@ class DownloadManager {
 
         if (task.isServer) {
             // 云端任务：通知后端停止，并更新本地状态
-            if (task.status === 'downloading' || task.status === 'waiting') {
-                const songKey = task.id.replace(/^server_(batch_)?/, '');
+            if (task.status === 'downloading' || task.status === 'waiting' || task.status === 'tagging') {
+                const songKey = this.getTaskServerSongKey(task);
                 const headers = { 'Content-Type': 'application/json', ...(window.getUserAuthHeaders ? window.getUserAuthHeaders() : {}) };
 
                 fetch('/api/music/cache/stop', {
                     method: 'POST',
                     headers,
-                    body: JSON.stringify({ songKey })
+                    body: JSON.stringify(task.serverManaged ? { queueId: task.serverQueueId || task.id } : { songKey })
                 }).catch(e => console.warn('[DownloadManager] Failed to stop server task:', e));
                 task.status = 'paused';
+                task.speed = 0;
                 task.errorMsg = '已暂停';
                 this.renderTask(task);
+                this.saveTasks();
+                this.updateGlobalProgress();
+                this.processQueue();
             }
         } else {
             // 本地任务
@@ -684,7 +1119,10 @@ class DownloadManager {
                 }
             } else if (task.status === 'waiting') {
                 task.status = 'paused';
+                task.speed = 0;
                 this.renderTask(task);
+                this.saveTasks();
+                this.updateGlobalProgress();
             }
         }
     }
@@ -695,61 +1133,39 @@ class DownloadManager {
 
         task.status = 'waiting';
         task.downloadedBytes = 0;
+        task.totalBytes = 0;
         task.progress = 0;
-        this.renderTask(task);
-
-        if (task.isServer) {
-            // 云端任务：恢复时由于后端进程可能已中止，需要重新触发解析与下载
-            (async () => {
-                try {
-                    if (typeof resolveSongUrl !== 'function') throw new Error('resolveSongUrl not available');
-                    // 重新获取音质编码（处理显示名称）
-                    let quality = task.quality;
-                    if (window.QualityManager) {
-                        quality = window.QualityManager.getBestQuality(task.song, quality);
-                    }
-                    const result = await resolveSongUrl(task.song, quality, true, true);
-                    if (!result || !result.url) throw new Error('获取播放地址失败');
-
-                    // [Fix] 还原代理 URL 为原始外部 URL
-                    let rawUrl = result.url;
-                    if (rawUrl.startsWith('/api/music/download')) {
-                        const proxyParams = new URLSearchParams(rawUrl.includes('?') ? rawUrl.split('?')[1] : '');
-                        const extracted = proxyParams.get('url');
-                        if (extracted) rawUrl = decodeURIComponent(extracted);
-                    }
-                    if (!rawUrl.startsWith('http')) throw new Error('无法获取有效的外部下载地址');
-
-                    const headers = { 'Content-Type': 'application/json', ...(window.getUserAuthHeaders ? window.getUserAuthHeaders() : {}) };
-
-                    const res = await fetch('/api/music/cache/download', {
-                        method: 'POST',
-                        headers,
-                        body: JSON.stringify({ songInfo: task.song, url: rawUrl, quality, enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false })
-                    });
-                    if (!res.ok) throw new Error('服务器拒绝请求');
-
-                    task.status = 'downloading';
-                    this.renderTask(task);
-                } catch (err) {
-                    console.warn('[DownloadManager] Resume cloud task failed:', task.song.name, err);
-                    task.status = 'error';
-                    task.errorMsg = err.message || '恢复失败';
-                    this.renderTask(task);
-                }
-            })();
-        } else {
-            // 本地任务
-            this.processQueue();
+        task.speed = 0;
+        task.errorMsg = '';
+        task.missingProgressCount = 0;
+        task.cacheRecheckPending = false;
+        task.lastPolledBytes = undefined;
+        task.lastPolledTime = undefined;
+        task.controller = null;
+        if (task.serverManaged) {
+            const request = task.serverQueueRegistered === false
+                ? this.enqueueServerTasks([task])
+                : this.requestServerQueue('/api/music/cache/queue/resume', { id: task.serverQueueId || task.id });
+            request.catch(error => {
+                task.status = 'error';
+                task.errorMsg = error.message || '继续任务失败';
+                this.renderTask(task);
+            });
         }
+        this.renderTask(task);
+        this.saveTasks();
+        this.processQueue();
     }
 
     deleteTask(taskId) {
         const task = this.tasks.find(t => t.id === taskId);
         if (task) {
-            if (task.isServer && (task.status === 'downloading' || task.status === 'waiting')) {
+            if (task.serverManaged) {
+                this.requestServerQueue('/api/music/cache/queue/remove', { id: task.serverQueueId || task.id })
+                    .catch(e => console.warn('[DownloadManager] Failed to remove server queue task:', e));
+            } else if (task.isServer && (task.status === 'downloading' || task.status === 'waiting' || task.status === 'tagging')) {
                 // 云端任务：通知后端停止
-                const songKey = task.id.replace(/^server_(batch_)?/, '');
+                const songKey = this.getTaskServerSongKey(task);
                 const headers = { 'Content-Type': 'application/json', ...(window.getUserAuthHeaders ? window.getUserAuthHeaders() : {}) };
 
                 fetch('/api/music/cache/stop', {
@@ -768,27 +1184,74 @@ class DownloadManager {
     }
 
     pauseAll() {
+        const headers = { 'Content-Type': 'application/json', ...(window.getUserAuthHeaders ? window.getUserAuthHeaders() : {}) };
+        const hasManagedServerTasks = this.tasks.some(t => t.serverManaged && ['waiting', 'downloading', 'tagging'].includes(t.status));
+        if (hasManagedServerTasks) {
+            fetch('/api/music/cache/stop', {
+                method: 'POST', headers, body: JSON.stringify({ all: true })
+            }).catch(e => console.warn('[DownloadManager] Failed to pause persistent server queue:', e));
+        }
         this.tasks.forEach(t => {
-            if (t.status === 'downloading' || t.status === 'waiting') {
-                this.pauseTask(t.id);
+            if (t.status !== 'downloading' && t.status !== 'waiting' && t.status !== 'tagging' && t.status !== 'starting') return;
+            if (t.nativeDownloadDispatched && t.status === 'downloading') return;
+
+            if (t.isServer && !t.serverManaged) {
+                const songKey = this.getTaskServerSongKey(t);
+                fetch('/api/music/cache/stop', {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({ songKey })
+                }).catch(e => console.warn('[DownloadManager] Failed to stop server task:', e));
+            } else if (t.controller) {
+                t.controller.abort();
             }
+
+            t.status = 'paused';
+            t.speed = 0;
+            t.errorMsg = '已暂停';
         });
+        this.activeCount = 0;
+        this.renderList();
+        this.saveTasks();
+        this.updateGlobalProgress();
     }
 
     resumeAll() {
+        const hasManagedServerTasks = this.tasks.some(t => t.serverManaged && (t.status === 'paused' || t.status === 'error'));
+        if (hasManagedServerTasks) {
+            this.requestServerQueue('/api/music/cache/queue/resume', { all: true })
+                .catch(e => console.warn('[DownloadManager] Failed to resume persistent server queue:', e));
+        }
         this.tasks.forEach(t => {
-            if (t.status === 'paused') {
-                this.resumeTask(t.id);
-            }
+            if (t.status !== 'paused') return;
+            t.status = 'waiting';
+            t.downloadedBytes = 0;
+            t.totalBytes = 0;
+            t.progress = 0;
+            t.speed = 0;
+            t.errorMsg = '';
+            t.missingProgressCount = 0;
+            t.cacheRecheckPending = false;
+            t.lastPolledBytes = undefined;
+            t.lastPolledTime = undefined;
+            t.controller = null;
         });
+        this.renderList();
+        this.saveTasks();
+        this.processQueue();
     }
 
     retryAllFailed() {
         // 取出所有失败任务的快照，避免在遍历同时修改数组引起问题
         const failedTasks = this.tasks.filter(t => t.status === 'error');
         if (failedTasks.length === 0) return;
+        const unregisteredServerTasks = failedTasks.filter(t => t.serverManaged && t.serverQueueRegistered === false);
 
         failedTasks.forEach(t => {
+            if (t.serverManaged) {
+                if (t.serverQueueRegistered !== false) this.requestServerQueue('/api/music/cache/queue/resume', { id: t.serverQueueId || t.id })
+                    .catch(e => console.warn('[DownloadManager] Failed to retry server queue task:', e));
+            }
             t.retryCount = 0;
             t.downloadedBytes = 0;
             t.progress = 0;
@@ -797,51 +1260,10 @@ class DownloadManager {
             this.tasks = this.tasks.filter(x => x.id !== t.id);
 
             if (t.isServer) {
-                // 云端任务：重新 resolve URL 并触发后端下载
+                // 云端任务：放回队列等待 processQueue 调度
                 t.status = 'waiting';
                 this.tasks.push(t);
                 this.renderTask(t);
-
-                // 异步重新触发云端下载
-                (async () => {
-                    try {
-                        if (typeof resolveSongUrl !== 'function') throw new Error('resolveSongUrl not available');
-                        // 尝试通过 QualityManager 将可能是显示名称的 quality 转换为原始 code
-                        let quality = t.quality;
-                        if (window.QualityManager) {
-                            // getBestQuality 能处理原始 code 和 preferred 偏好，传入 t.quality 作为偏好，让其降级匹配
-                            quality = window.QualityManager.getBestQuality(t.song, quality);
-                        }
-                        const result = await resolveSongUrl(t.song, quality, true, true);
-                        if (!result || !result.url) throw new Error('获取地址失败');
-
-                        // [Fix] 还原代理 URL 为原始外部 URL
-                        let rawUrl = result.url;
-                        if (rawUrl.startsWith('/api/music/download')) {
-                            const proxyParams = new URLSearchParams(rawUrl.includes('?') ? rawUrl.split('?')[1] : '');
-                            const extracted = proxyParams.get('url');
-                            if (extracted) rawUrl = decodeURIComponent(extracted);
-                        }
-                        if (!rawUrl.startsWith('http')) throw new Error('无法获取有效的外部下载地址');
-
-                        const headers = { 'Content-Type': 'application/json', ...(window.getUserAuthHeaders ? window.getUserAuthHeaders() : {}) };
-
-                        const res = await fetch('/api/music/cache/download', {
-                            method: 'POST',
-                            headers,
-                            body: JSON.stringify({ songInfo: t.song, url: rawUrl, quality, enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false })
-                        });
-                        if (!res.ok) throw new Error('服务器拒绝缓存');
-
-                        t.status = 'downloading';
-                        this.renderTask(t);
-                    } catch (err) {
-                        console.warn('[DownloadManager] Retry cloud task failed:', t.song.name, err);
-                        t.status = 'error';
-                        t.errorMsg = err.message || '重试失败';
-                        this.renderTask(t);
-                    }
-                })();
             } else {
                 // 本地任务：放回队列等待 processQueue 调度
                 t.status = 'waiting';
@@ -849,12 +1271,18 @@ class DownloadManager {
             }
         });
 
+        if (unregisteredServerTasks.length) void this.enqueueServerTasks(unregisteredServerTasks);
+
         this.renderList();
         this.processQueue();
     }
 
     clearCompleted() {
-        this.tasks = this.tasks.filter(t => t.status !== 'finished');
+        if (this.tasks.some(t => t.serverManaged && (t.status === 'finished' || t.status === 'exists'))) {
+            this.requestServerQueue('/api/music/cache/queue/remove', { completed: true })
+                .catch(e => console.warn('[DownloadManager] Failed to clear completed server queue tasks:', e));
+        }
+        this.tasks = this.tasks.filter(t => t.status !== 'finished' && t.status !== 'exists');
         this.renderList();
         this.saveTasks();
     }
@@ -862,14 +1290,17 @@ class DownloadManager {
     clearAll() {
         // 先弹确认框
         if (typeof showSelect === 'function') {
-            showSelect('停止并清空任务', '确认要立即停止所有进行中的任务并清空列表吗？', {
-                confirmText: '确认停止',
+            const hasActiveTasks = this.tasks.some(t => t.status === 'downloading' || t.status === 'waiting' || t.status === 'tagging');
+            const title = hasActiveTasks ? '停止并清空任务' : '清空任务列表';
+            const message = hasActiveTasks ? '确认要立即停止所有进行中的任务并清空列表吗？' : '确认要清空所有下载任务记录吗？';
+            showSelect(title, message, {
+                confirmText: hasActiveTasks ? '确认停止' : '确认清空',
                 danger: true
             }).then(confirmed => {
                 if (!confirmed) return;
                 this.tasks.forEach(t => {
                     // 本地任务调用 abort
-                    if ((t.status === 'downloading' || t.status === 'waiting') && t.controller) {
+                    if ((t.status === 'downloading' || t.status === 'waiting' || t.status === 'tagging') && t.controller) {
                         try { t.controller.abort(); } catch (e) { }
                     }
                 });
@@ -880,10 +1311,13 @@ class DownloadManager {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'x-user-name': username
+                        'x-user-name': username,
+                        ...(window.getUserAuthHeaders ? window.getUserAuthHeaders() : {})
                     },
                     body: JSON.stringify({ all: true })
                 }).catch(err => console.error('[DownloadManager] Failed to stop server tasks:', err));
+                this.requestServerQueue('/api/music/cache/queue/remove', { all: true })
+                    .catch(err => console.error('[DownloadManager] Failed to clear persistent server queue:', err));
 
                 this.tasks = [];
                 this.activeCount = 0;
@@ -895,6 +1329,8 @@ class DownloadManager {
             this.tasks.forEach(t => {
                 if (t.status === 'downloading' && t.controller) t.controller.abort();
             });
+            this.requestServerQueue('/api/music/cache/queue/remove', { all: true })
+                .catch(err => console.error('[DownloadManager] Failed to clear persistent server queue:', err));
             this.tasks = [];
             this.activeCount = 0;
             this.renderList();
@@ -906,16 +1342,28 @@ class DownloadManager {
     saveTasks() {
         try {
             // Serialize only the data we need, not the AbortController
-            const data = this.tasks.map(t => ({
+            // Server-managed tasks are persisted by the backend and restored through
+            // /api/music/cache/queue. Keep sessionStorage for browser downloads only.
+            const data = this.tasks.filter(t => !t.serverManaged).map(t => ({
                 id: t.id,
-                song: t.song,
+                song: this.getSongInfoForStorage(t.song),
                 isServer: t.isServer,
+                useNativeDownload: !!t.useNativeDownload,
+                nativeDownloadDispatched: !!t.nativeDownloadDispatched,
                 quality: t.quality,
-                status: t.status === 'downloading' ? (t.isServer ? 'waiting' : 'waiting') : t.status,
-                progress: t.status === 'finished' ? 100 : (t.isServer ? t.progress : 0),
+                status: t.isServer
+                    ? t.status
+                    : (['waiting', 'starting', 'downloading', 'tagging'].includes(t.status) ? 'paused' : t.status),
+                progress: (t.status === 'finished' || t.status === 'exists') ? 100 : (t.isServer ? t.progress : 0),
+                downloadedBytes: t.downloadedBytes || 0,
+                totalBytes: t.totalBytes || 0,
+                speed: t.speed || 0,
+                serverSongKey: t.serverSongKey || '',
                 errorMsg: t.errorMsg || '',
                 retryCount: t.retryCount || 0,
-                maxRetries: t.maxRetries || 2
+                maxRetries: t.maxRetries || 2,
+                hasLyric: t.hasLyric === 'checking' ? undefined : t.hasLyric,
+                lyricRetryCount: t.lyricRetryCount || 0
             }));
             sessionStorage.setItem('lx_download_tasks', JSON.stringify(data));
         } catch (e) {
@@ -932,20 +1380,33 @@ class DownloadManager {
             if (!Array.isArray(data) || data.length === 0) return;
 
             data.forEach(t => {
+                const restoredStatus = !t.isServer && ['waiting', 'starting', 'downloading', 'tagging'].includes(t.status)
+                    ? 'paused'
+                    : t.status;
                 this.tasks.push({
-                    id: t.id,
+                    id: /^[A-Za-z0-9_-]+$/.test(String(t.id || '')) ? t.id : this.createTaskId(t.isServer ? 'server' : 'dl'),
                     song: t.song,
                     isServer: t.isServer || false,
+                    // Migrate server tasks left by older versions without allowing
+                    // the browser scheduler to start a duplicate download.
+                    serverManaged: !!t.isServer,
+                    serverQueueRegistered: false,
+                    serverQueueId: t.isServer ? t.id : null,
+                    useNativeDownload: !t.isServer && (t.useNativeDownload !== false),
+                    nativeDownloadDispatched: !!t.nativeDownloadDispatched,
+                    serverSongKey: t.serverSongKey || '',
                     quality: t.quality || '',
                     // Local downloading → reset to waiting to re-download; server/finished → keep status
-                    status: t.status,
+                    status: restoredStatus,
                     progress: t.progress || 0,
-                    downloadedBytes: 0,
-                    totalBytes: 0,
-                    speed: 0,
+                    downloadedBytes: t.downloadedBytes || 0,
+                    totalBytes: t.totalBytes || 0,
+                    speed: t.speed || 0,
                     errorMsg: t.errorMsg || '',
                     retryCount: t.retryCount || 0,
                     maxRetries: t.maxRetries || 2,
+                    hasLyric: t.hasLyric === 'checking' ? undefined : t.hasLyric,
+                    lyricRetryCount: t.lyricRetryCount || 0,
                     controller: null
                 });
             });
@@ -967,16 +1428,16 @@ class DownloadManager {
         let pctCount = 0;
 
         this.tasks.forEach(t => {
-            if (t.status === 'downloading') {
+            if (t.status === 'downloading' || t.status === 'tagging') {
                 totalSpeed += (t.speed || 0);
                 active++;
             }
             // 所有任务都纳入进度计算（server 任务可能 totalBytes=0，但 progress/status 是已知的）
-            if (t.status === 'finished') {
+            if (t.status === 'finished' || t.status === 'exists') {
                 pctTotal += 100;
                 pctCount++;
-            } else if (t.status === 'downloading' || t.status === 'waiting') {
-                pctTotal += (t.progress || 0);
+            } else if (t.status === 'downloading' || t.status === 'waiting' || t.status === 'tagging') {
+                pctTotal += t.status === 'tagging' ? 100 : (t.progress || 0);
                 pctCount++;
             }
         });
@@ -1023,16 +1484,20 @@ class DownloadManager {
             const hasRealProgress = isServerTask && (task.totalBytes > 0 || task.progress > 0);
             statusText = isServerTask
                 ? (hasRealProgress ? `云端 ${progressWidth}%` : '云端下载中')
-                : `${progressWidth}%`;
-            speedText = task.speed > 0 ? `${this.formatSize(task.speed)}/s` : '';
+                : (task.nativeDownloadDispatched ? `浏览器 ${progressWidth}%` : `${progressWidth}%`);
+            speedText = `${this.formatSize(Math.max(0, task.speed || 0))}/s`;
 
-            if (!isServerTask) {
+            if (!isServerTask && !task.nativeDownloadDispatched) {
                 actionBtnHTML = `
                     <button onclick="window.SystemDownloadManager.pauseTask('${task.id}')" class="w-8 h-8 rounded-full border border-yellow-200 text-yellow-500 hover:bg-yellow-50 flex items-center justify-center transition-colors shadow-sm" title="暂停">
                         <i class="fas fa-pause text-xs"></i>
                     </button>
                 `;
             }
+        } else if (task.status === 'tagging') {
+            statusBg = 'bg-orange-100 text-orange-600';
+            statusText = isServerTask ? '写入标签' : '处理中';
+            progressWidth = 100;
         } else if (task.status === 'paused') {
             statusBg = 'bg-yellow-100 text-yellow-600';
             statusText = '已暂停';
@@ -1146,13 +1611,49 @@ class DownloadManager {
         if (!this.listContainer) return;
 
         if (this.tasks.length === 0) {
+            this.renderedRange = { start: 0, end: 0 };
             this.listContainer.innerHTML = this.getStatusHtml('fa-inbox', '暂无下载任务');
             return;
         }
 
-        this.listContainer.innerHTML = this.tasks.map(t => this.renderTaskHtml(t)).join('');
+        const containerHeight = this.listContainer.clientHeight || 600;
+        const visibleCount = Math.ceil(containerHeight / this.estimatedTaskHeight) + this.renderBuffer * 2;
+        const maxStart = Math.max(0, this.tasks.length - visibleCount);
+        const start = Math.min(
+            maxStart,
+            Math.max(0, Math.floor(this.listContainer.scrollTop / this.estimatedTaskHeight) - this.renderBuffer)
+        );
+        const end = Math.min(this.tasks.length, start + visibleCount);
+        this.renderedRange = { start, end };
+
+        const topSpacer = start * this.estimatedTaskHeight;
+        const bottomSpacer = Math.max(0, (this.tasks.length - end) * this.estimatedTaskHeight);
+        const visibleTasks = this.tasks.slice(start, end);
+
+        this.listContainer.innerHTML = `
+            <div style="height: ${topSpacer}px;"></div>
+            ${visibleTasks.map(t => this.renderTaskHtml(t)).join('')}
+            <div style="height: ${bottomSpacer}px;"></div>
+        `;
+
+        const firstTaskEl = this.listContainer.querySelector('[id^="dl-task-"]');
+        if (firstTaskEl) {
+            const measuredHeight = firstTaskEl.getBoundingClientRect().height + 8;
+            if (measuredHeight > 0 && Math.abs(measuredHeight - this.estimatedTaskHeight) > 6) {
+                this.estimatedTaskHeight = measuredHeight;
+            }
+        }
+
         // 触发标题滚动检测
         if (typeof applyMarqueeChecks === 'function') applyMarqueeChecks();
+    }
+
+    scheduleScrollRender() {
+        if (this.scrollRenderRaf) return;
+        this.scrollRenderRaf = requestAnimationFrame(() => {
+            this.scrollRenderRaf = null;
+            this.renderList();
+        });
     }
 
     // Update specific task in DOM to avoid full re-render
@@ -1160,6 +1661,8 @@ class DownloadManager {
         if (!this.listContainer) return;
         const taskEl = document.getElementById(`dl-task-${task.id}`);
         if (!taskEl) {
+            const taskIndex = this.tasks.findIndex(t => t.id === task.id);
+            if (taskIndex >= 0 && (taskIndex < this.renderedRange.start || taskIndex >= this.renderedRange.end)) return;
             // Task element doesn't exist (maybe switched views?), do full render
             this.renderList();
             return;

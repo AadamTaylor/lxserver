@@ -1,8 +1,9 @@
 // import { httpFetch } from '../../request'
 // import { weapi } from './utils/crypto'
-import { sizeFormate, formatPlayTime } from '../../index'
+import { formatPlayTime } from '../../index'
 // import musicDetailApi from './musicDetail'
 import { eapiRequest } from './utils/index'
+import { buildQualitys } from './quality'
 
 export default {
   limit: 30,
@@ -40,40 +41,7 @@ export default {
     if (!rawList) return []
     return rawList.map(item => {
       item = item.baseInfo.simpleSongData
-      const types = []
-      const _types = {}
-      let size
-
-      if (item.privilege.maxBrLevel == 'hires') {
-        size = item.hr ? sizeFormate(item.hr.size) : null
-        types.push({ type: 'flac24bit', size })
-        _types.flac24bit = {
-          size,
-        }
-      }
-      switch (item.privilege.maxbr) {
-        case 999000:
-          size = item.sq ? sizeFormate(item.sq.size) : null
-          types.push({ type: 'flac', size })
-          _types.flac = {
-            size,
-          }
-        case 320000:
-          size = item.h ? sizeFormate(item.h.size) : null
-          types.push({ type: '320k', size })
-          _types['320k'] = {
-            size,
-          }
-        case 192000:
-        case 128000:
-          size = item.l ? sizeFormate(item.l.size) : null
-          types.push({ type: '128k', size })
-          _types['128k'] = {
-            size,
-          }
-      }
-
-      types.reverse()
+      const { types, _types } = buildQualitys(item, item.privilege)
 
       return {
         singer: this.getSinger(item.ar),

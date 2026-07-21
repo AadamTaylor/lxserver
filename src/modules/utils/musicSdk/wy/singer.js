@@ -1,6 +1,7 @@
 import { weapiRequest } from './utils/index'
-import { formatPlayTime, sizeFormate } from '../../index'
+import { formatPlayTime } from '../../index'
 import { formatSingerName } from '../utils'
+import { buildQualitys } from './quality'
 
 export default {
   /**
@@ -101,37 +102,13 @@ export default {
     raw.forEach(item => {
       if (!item.id) return
 
-      const types = []
-      const _types = {}
-      let size
-      item.privilege.chargeInfoList.forEach(i => {
-        switch (i.rate) {
-          case 128000:
-            size = item.lMusic ? sizeFormate(item.lMusic.size) : null
-            types.push({ type: '128k', size })
-            _types['128k'] = {
-              size,
-            }
-          case 320000:
-            size = item.hMusic ? sizeFormate(item.hMusic.size) : null
-            types.push({ type: '320k', size })
-            _types['320k'] = {
-              size,
-            }
-          case 999000:
-            size = item.sqMusic ? sizeFormate(item.sqMusic.size) : null
-            types.push({ type: 'flac', size })
-            _types.flac = {
-              size,
-            }
-          case 1999000:
-            size = item.hrMusic ? sizeFormate(item.hrMusic.size) : null
-            types.push({ type: 'flac24bit', size })
-            _types.flac24bit = {
-              size,
-            }
-        }
-      })
+      const { types, _types } = buildQualitys({
+        ...item,
+        l: item.lMusic,
+        h: item.hMusic,
+        sq: item.sqMusic,
+        hr: item.hrMusic,
+      }, item.privilege)
 
       list.push({
         singer: formatSingerName(item.artists),
