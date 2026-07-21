@@ -38,7 +38,7 @@
   "dependencies": {
     "@foobar404/wave": "^2.0.5",
     "@types/formidable": "^3.5.1",
-    "archiver": "^7.0.1",
+    "archiver": "^8.0.0",
     "brace-expansion": "^5.0.6",
     "bufferutil": "^4.0.8",
     "crypto-js": "^4.2.0",
@@ -61,7 +61,7 @@
   "devDependencies": {
     "@tsconfig/node16": "^16.1.1",
     "@tsconfig/recommended": "^1.0.13",
-    "@types/archiver": "^7.0.0",
+    "@types/archiver": "^8.0.0",
     "@types/module-alias": "^2.0.4",
     "@types/needle": "^3.3.0",
     "@types/tunnel": "^0.0.7",
