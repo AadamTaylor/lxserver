@@ -108,7 +108,8 @@ const DEFAULT_SETTINGS = {
     enableServerLyricCache: true, // 开启服务器歌词文件缓存
     embedLyricToFile: true, // 下载时将歌词嵌入文件（标签+.lrc）
     serverCacheLocation: 'root', // 缓存位置: 'data' (synced) or 'root' (local)
-    serverCacheNamingPattern: 'simple', // 缓存命名规则: standard | simple | artist-title | title-only
+    serverCacheNamingPattern: 'simple', // 缓存命名规则: standard | simple
+    enableRemaster: false, // 启用下载目录歌曲洗版
     enableLyricCache: true,
     enableSongUrlCache: true,
     enableLyricGlow: true, // 歌词荧光效果 (默认开启)
@@ -134,9 +135,13 @@ function normalizeDownloadConcurrency(value) {
 
 function normalizeStoredSettings(nextSettings) {
     if (!nextSettings || typeof nextSettings !== 'object') return nextSettings;
+    delete nextSettings.remasterRetryManifest;
     if (nextSettings.downloadConcurrency !== undefined) {
         nextSettings.downloadConcurrency = normalizeDownloadConcurrency(nextSettings.downloadConcurrency);
     }
+    nextSettings.serverCacheNamingPattern = nextSettings.serverCacheNamingPattern === 'standard'
+        ? 'standard'
+        : 'simple';
     return nextSettings;
 }
 
@@ -319,6 +324,56 @@ function getUserAuthHeaders() {
 }
 window.getUserAuthHeaders = getUserAuthHeaders;
 
+let userTokenRefreshPromise = null;
+
+async function ensureUserAuthToken(options = {}) {
+    const force = options.force === true;
+    const username = localStorage.getItem('lx_sync_user') || '';
+    const password = localStorage.getItem('lx_sync_pass') || '';
+
+    if (!username || !password) {
+        if (force) {
+            userToken = null;
+            localStorage.removeItem('lx_user_token');
+            if (typeof updateUserUI === 'function') updateUserUI();
+        }
+        return false;
+    }
+    if (userToken && !force) return true;
+    if (userTokenRefreshPromise) return userTokenRefreshPromise;
+
+    userTokenRefreshPromise = (async () => {
+        if (force) {
+            userToken = null;
+            localStorage.removeItem('lx_user_token');
+        }
+        try {
+            const response = await fetch('/api/user/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
+            if (!response.ok) return false;
+
+            const result = await response.json();
+            if (!result.success || !result.token) return false;
+
+            userToken = result.token;
+            localStorage.setItem('lx_user_token', userToken);
+            if (typeof updateUserUI === 'function') updateUserUI();
+            return true;
+        } catch (error) {
+            console.warn('[Auth] Token 自动续签失败:', error);
+            return false;
+        } finally {
+            userTokenRefreshPromise = null;
+        }
+    })();
+
+    return userTokenRefreshPromise;
+}
+window.ensureUserAuthToken = ensureUserAuthToken;
+
 /**
  * 更新顶部栏的用户状态显示 (登录按钮/用户名)
  */
@@ -410,9 +465,12 @@ window.handleHeaderLogout = handleHeaderLogout;
                 });
                 const vData = await vRes.json();
                 if (!vData.valid) {
-                    console.log('[Auth] 用户 Token 已过期，已清除。如需使用账户功能请重新登录。');
-                    localStorage.removeItem('lx_user_token');
-                    userToken = null;
+                    const refreshed = await ensureUserAuthToken({ force: true });
+                    if (refreshed) {
+                        console.log('[Auth] 用户 Token 已失效，已自动续签。');
+                    } else {
+                        console.log('[Auth] 用户 Token 已失效且无法自动续签，请重新登录。');
+                    }
                 }
             } catch (e) {
                 console.warn('[Auth] Token 验证失败:', e);
@@ -3467,6 +3525,8 @@ async function fetchSongUrl(song, quality, isRetry = false, isSilent = false) {
                 sourceType: 'normal',
                 quality: result.type || quality,
                 sourceName: result.sourceName,
+                requestedSource: result.requestedSource || song.source,
+                downloadSource: result.downloadSource || song.source,
                 songInfo: song,
                 errorMsg: result.errorMsg
             };
@@ -5532,11 +5592,31 @@ document.addEventListener('keyup', (e) => {
     if (e.code === 'ArrowRight') handleSeekKey('forward', 'up');
 });
 
+function getRemasterStorageUsername() {
+    const username = currentListData?.username || localStorage.getItem('lx_sync_user') || '_open';
+    return !username || username === 'default' ? '_open' : username;
+}
+
+async function toggleRemasterFeature(enabled) {
+    const toggle = document.getElementById('setting-enable-remaster');
+    try {
+        await updateSetting('enableRemaster', !!enabled);
+        if (toggle) toggle.checked = !!window.settings?.enableRemaster;
+        window.LocalMusicManager?.syncRemasterVisibility();
+    } catch (e) {
+        if (toggle) toggle.checked = !!window.settings?.enableRemaster;
+        showError(e.message || '更新洗版设置失败');
+    }
+}
+
+window.getRemasterStorageUsername = getRemasterStorageUsername;
+window.toggleRemasterFeature = toggleRemasterFeature;
+
 async function updateSetting(key, value) {
     if (SETTINGS_UI_MAP[key]?.normalize) {
         value = SETTINGS_UI_MAP[key].normalize(value);
     }
-    const restrictedKeys = ['enableServerCache', 'enableServerLyricCache', 'serverCacheLocation', 'serverCacheNamingPattern', 'enableOnlyDownloadMode'];
+    const restrictedKeys = ['enableServerCache', 'enableServerLyricCache', 'serverCacheLocation', 'serverCacheNamingPattern', 'enableOnlyDownloadMode', 'enableRemaster'];
     const isPublic = !currentListData?.username || currentListData?.username === 'default';
     const enablePublicRestriction = window.lx_config?.['user.enablePublicRestriction'];
     const enableLoginCacheRestriction = window.lx_config?.['user.enableLoginCacheRestriction'];
@@ -5650,6 +5730,11 @@ const SETTINGS_UI_MAP = {
             }
         }
     },
+    enableRemaster: {
+        id: 'setting-enable-remaster',
+        type: 'checkbox',
+        action: () => window.LocalMusicManager?.syncRemasterVisibility()
+    },
     enableKeyboardShortcuts: { id: 'setting-enable-shortcuts', type: 'checkbox' },
     enableCrossfade: { id: 'setting-enable-crossfade', type: 'checkbox' },
     keepScreenAwake: {
@@ -5754,7 +5839,11 @@ const SETTINGS_UI_MAP = {
     preferServerCache: { id: 'setting-prefer-server-cache', type: 'checkbox' },
     enableOnlyDownloadMode: { id: 'setting-only-download-mode', type: 'checkbox' },
     serverCacheLocation: { id: 'setting-server-cache-location', type: 'value' },
-    serverCacheNamingPattern: { id: 'setting-server-cache-naming', type: 'value' },
+    serverCacheNamingPattern: {
+        id: 'setting-server-cache-naming',
+        type: 'value',
+        normalize: value => value === 'standard' ? 'standard' : 'simple'
+    },
     enableProxyPlayback: { id: 'toggle-proxy-playback', type: 'checkbox' },
     enableProxyDownload: { id: 'toggle-proxy-download', type: 'checkbox' },
     enableAutoProxy: { id: 'toggle-auto-proxy', type: 'checkbox' },
@@ -5792,7 +5881,7 @@ function syncSettingsUI(key = null, value = null) {
     const enablePublicRestriction = window.lx_config?.['user.enablePublicRestriction'];
     const enableLoginCacheRestriction = window.lx_config?.['user.enableLoginCacheRestriction'];
     const isAdmin = !!localStorage.getItem('lx_admin_password');
-    const restrictedKeys = ['enableServerCache', 'enableServerLyricCache', 'serverCacheLocation', 'serverCacheNamingPattern', 'enableOnlyDownloadMode'];
+    const restrictedKeys = ['enableServerCache', 'enableServerLyricCache', 'serverCacheLocation', 'serverCacheNamingPattern', 'enableOnlyDownloadMode', 'enableRemaster'];
 
     const updateItem = (itemKey, itemValue, isSingle) => {
         const config = SETTINGS_UI_MAP[itemKey];
@@ -8320,6 +8409,7 @@ function showSyncModeModal() {
     document.getElementById('sync-connect-form').classList.add('hidden');
     document.getElementById('sync-mode-selection').classList.remove('hidden');
 }
+window.showSyncModeModal = showSyncModeModal;
 
 
 function closeSyncModal() {
@@ -10981,7 +11071,7 @@ function showInput(title, message, options = {}) {
 
     return new Promise((resolve) => {
         const modal = document.createElement('div');
-        modal.className = "fixed inset-0 z-[100] flex items-center justify-center p-4 animate-fade-in";
+        modal.className = "fixed inset-0 z-[200] flex items-center justify-center p-4 animate-fade-in";
         modal.innerHTML = `
             <div class="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-300"></div>
             <div class="t-bg-panel rounded-xl shadow-2xl w-full max-w-sm overflow-hidden transform transition-all animate-slide-up relative z-10 border t-border-main">
@@ -11062,7 +11152,7 @@ function showSelect(title, message, options = {}) {
 
     return new Promise((resolve) => {
         const modal = document.createElement('div');
-        modal.className = "fixed inset-0 z-[100] flex items-center justify-center p-4 animate-fade-in";
+        modal.className = "fixed inset-0 z-[200] flex items-center justify-center p-4 animate-fade-in";
         modal.innerHTML = `
             <div class="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-300"></div>
             <div class="t-bg-panel rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden transform transition-all animate-slide-up relative z-10 border t-border-main">
@@ -11123,7 +11213,7 @@ function showSelect(title, message, options = {}) {
 function showOptions(title, message, options = []) {
     return new Promise((resolve) => {
         const modal = document.createElement('div');
-        modal.className = "fixed inset-0 z-[100] flex items-center justify-center p-4 animate-fade-in";
+        modal.className = "fixed inset-0 z-[200] flex items-center justify-center p-4 animate-fade-in";
 
         const optionsHtml = options.map(opt => `
             <button class="w-full text-left px-4 py-3.5 t-text-main hover:bg-emerald-500 hover:text-white transition-all rounded-xl font-bold text-sm flex items-center justify-between group" data-value="${opt}">

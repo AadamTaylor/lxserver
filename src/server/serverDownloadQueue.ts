@@ -38,6 +38,9 @@ interface ResolveResult {
   url: string
   quality?: string
   songInfo?: any
+  requestedSource?: string
+  downloadSource?: string
+  sourceName?: string
 }
 
 type DownloadResolver = (task: ServerDownloadTask) => Promise<ResolveResult>
@@ -190,7 +193,11 @@ const runTask = async (task: ServerDownloadTask) => {
     scheduleSave()
 
     await fileCache.downloadAndCache(task.songInfo, resolved.url, task.quality, task.username, controller.signal,
-      task.enableOnlyDownloadMode, task.cacheLyric, task.embedLyric)
+      task.enableOnlyDownloadMode, task.cacheLyric, task.embedLyric, {
+        requestedSource: resolved.requestedSource,
+        downloadSource: resolved.downloadSource,
+        sourceName: resolved.sourceName,
+      })
 
     if (controller.signal.aborted) return
     const progress = fileCache.cacheProgress.get(task.activeSongKey)
@@ -266,12 +273,26 @@ export const enqueue = (username: string, inputs: QueueInput[]) => {
     const quality = input.quality || '320k'
     const existing = tasks.get(key)
     if (existing) {
-      if (existing.status === 'paused' || existing.status === 'error') {
-        existing.status = 'waiting'
-        existing.errorMsg = ''
-        existing.updatedAt = Date.now()
-        added.push(existing)
-      }
+      if (['waiting', 'downloading', 'tagging'].includes(existing.status)) continue
+
+      const now = Date.now()
+      existing.songKey = fileCache.normalizeSongId(input.songInfo) + '_' + quality
+      existing.activeSongKey = undefined
+      existing.songInfo = input.songInfo
+      existing.quality = quality
+      existing.requestedQuality = quality
+      existing.status = 'waiting'
+      existing.progress = 0
+      existing.total = 0
+      existing.received = 0
+      existing.speed = 0
+      existing.errorMsg = ''
+      existing.enableOnlyDownloadMode = !!input.enableOnlyDownloadMode
+      existing.cacheLyric = input.cacheLyric !== false
+      existing.embedLyric = input.embedLyric !== false
+      existing.createdAt = now
+      existing.updatedAt = now
+      added.push(existing)
       continue
     }
     const now = Date.now()

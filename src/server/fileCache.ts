@@ -14,17 +14,20 @@ import { formatPlayTime } from '../common/utils/common'
 // --- Cache Naming Patterns ---
 export const CACHE_NAMING_PATTERNS = {
     STANDARD: 'standard',       // {Name}_-_{Singer}_-_{Source}_-_{ID}_-_{Quality}
-    SIMPLE: 'simple',           // {Name} - {Singer} - {Quality}
-    ARTIST_TITLE: 'artist-title',// {Singer} - {Name} - {Quality}
-    TITLE_ONLY: 'title-only'    // {Name} - {Quality}
+    SIMPLE: 'simple'            // {Name} - {Singer} - {Quality} - {Album}
 }
 
-let currentNamingPattern = CACHE_NAMING_PATTERNS.STANDARD
+let currentNamingPattern = CACHE_NAMING_PATTERNS.SIMPLE
 
-export const setNamingPattern = (pattern: string) => {
-    if (Object.values(CACHE_NAMING_PATTERNS).includes(pattern as any)) {
-        currentNamingPattern = pattern
-    }
+export const normalizeNamingPattern = (pattern: unknown) => (
+    pattern === CACHE_NAMING_PATTERNS.STANDARD
+        ? CACHE_NAMING_PATTERNS.STANDARD
+        : CACHE_NAMING_PATTERNS.SIMPLE
+)
+
+export const setNamingPattern = (pattern: unknown) => {
+    currentNamingPattern = normalizeNamingPattern(pattern)
+    return currentNamingPattern
 }
 
 // Define the two possible cache roots
@@ -70,12 +73,7 @@ export const getCacheDir = (username?: string, isOnlyDownload?: boolean) => {
 }
 
 export const getCoverCacheDir = (username: string) => {
-    let baseDir = ''
-    if (currentCacheLocation === CACHE_ROOTS.DATA) {
-        baseDir = path.join(global.lx.dataPath, 'cover_cache')
-    } else {
-        baseDir = path.join(process.cwd(), 'cover_cache')
-    }
+    const baseDir = path.join(global.lx.dataPath, 'cover_cache')
     const userDirName = (username && username !== '_open' && username !== 'default') ? username : '_open'
     const fullPath = path.join(baseDir, userDirName)
     if (!fs.existsSync(fullPath)) {
@@ -85,7 +83,7 @@ export const getCoverCacheDir = (username: string) => {
 }
 
 // --- Cache Index Manager ---
-interface CacheItem {
+export interface CacheItem {
     id: string
     songmid?: string
     name: string
@@ -95,6 +93,9 @@ interface CacheItem {
     img?: string
     interval?: string
     source: string
+    requestedSource?: string
+    downloadSource?: string
+    sourceName?: string
     quality: string
     filename: string
     folder: string // 'cache' or 'music'
@@ -104,14 +105,25 @@ interface CacheItem {
     lyricFilename?: string
     ext: string
     hasCover?: boolean
+    coverType?: 'embedded' | 'cached' | 'remote' | 'none'
     hasLyric?: boolean
     hasEmbedLyric?: boolean
+    audioContainer?: string
+    metadataWritable?: boolean
+    metadataError?: string
+    embedLyricError?: string
     coverCheckedVersion?: number
     coverCheckedMtime?: number
     coverCheckedSize?: number
     bitrate?: number
     sampleRate?: number
     bitDepth?: number
+}
+
+export interface DownloadProvenance {
+    requestedSource?: string
+    downloadSource?: string
+    sourceName?: string
 }
 
 class CacheIndexManager {
@@ -223,15 +235,82 @@ class CacheIndexManager {
     getAll(username: string, folder: 'cache' | 'music', location?: string) {
         return Array.from((this.indexes.get(this.getKey(username, folder, location)) || this.load(username, folder, location)).values())
     }
+
+    discard(username: string, folder: 'cache' | 'music', location?: string) {
+        this.indexes.delete(this.getKey(username, folder, location))
+    }
 }
 
 export const indexManager = new CacheIndexManager()
 
-const COVER_CHECK_VERSION = 2
+const COVER_CHECK_VERSION = 4
 
 const getCoverCacheHash = (filename: string, stats?: Stats) => {
     const version = stats ? `${stats.size}:${stats.mtimeMs}` : ''
     return crypto.createHash('md5').update(`${filename}:${version}`).digest('hex')
+}
+
+const getCoverCachePaths = (filename: string, username: string, stats?: Stats) => {
+    const hash = getCoverCacheHash(filename, stats)
+    const coverCacheDir = getCoverCacheDir(username)
+    return {
+        binPath: path.join(coverCacheDir, `${hash}.bin`),
+        mimePath: path.join(coverCacheDir, `${hash}.mime`),
+    }
+}
+
+const getLegacyCoverCachePaths = (filename: string, username: string, stats?: Stats) => {
+    const hash = getCoverCacheHash(filename, stats)
+    const userDirName = (username && username !== '_open' && username !== 'default') ? username : '_open'
+    const coverCacheDir = path.join(process.cwd(), 'cover_cache', userDirName)
+    return {
+        binPath: path.join(coverCacheDir, `${hash}.bin`),
+        mimePath: path.join(coverCacheDir, `${hash}.mime`),
+    }
+}
+
+const detectImageMime = (data: Buffer | Uint8Array) => {
+    const buffer = Buffer.from(data)
+    if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'image/jpeg'
+    if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png'
+    if (buffer.length >= 6 && ['GIF87a', 'GIF89a'].includes(buffer.subarray(0, 6).toString('ascii'))) return 'image/gif'
+    if (buffer.length >= 12 && buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp'
+    if (buffer.length >= 2 && buffer.subarray(0, 2).toString('ascii') === 'BM') return 'image/bmp'
+    return null
+}
+
+const readCoverCache = (filename: string, username: string, stats?: Stats) => {
+    const candidates = [getCoverCachePaths(filename, username, stats), getLegacyCoverCachePaths(filename, username, stats)]
+    for (const candidate of candidates) {
+        try {
+            if (!fs.existsSync(candidate.binPath) || !fs.existsSync(candidate.mimePath)) continue
+            const data = fs.readFileSync(candidate.binPath)
+            const detectedMime = detectImageMime(data)
+            if (!detectedMime) continue
+            const storedMime = fs.readFileSync(candidate.mimePath, 'utf8').trim()
+            const persistent = getCoverCachePaths(filename, username, stats)
+            if (candidate.binPath !== persistent.binPath) {
+                fs.copyFileSync(candidate.binPath, persistent.binPath)
+                fs.writeFileSync(persistent.mimePath, detectedMime || storedMime || 'image/jpeg')
+            }
+            return { data, mime: detectedMime || storedMime || 'image/jpeg' }
+        } catch (e) { }
+    }
+    return null
+}
+
+const hasCachedCover = (filename: string, username: string, stats?: Stats) => {
+    return !!readCoverCache(filename, username, stats)
+}
+
+const writeCoverCache = (filename: string, username: string, data: Buffer | Uint8Array, mime: string, stats?: Stats) => {
+    const coverData = Buffer.from(data)
+    const detectedMime = detectImageMime(coverData)
+    if (!detectedMime) return false
+    const { binPath, mimePath } = getCoverCachePaths(filename, username, stats)
+    fs.writeFileSync(binPath, coverData)
+    fs.writeFileSync(mimePath, detectedMime || mime || 'image/jpeg')
+    return true
 }
 
 const resolveCacheRelativePath = (dir: string, filename: string) => {
@@ -245,9 +324,11 @@ const resolveCacheRelativePath = (dir: string, filename: string) => {
 
 const hasValidPictureData = (picture: any) => {
     if (!picture || !picture.data) return false
-    if (typeof picture.data.length === 'number') return picture.data.length > 0
-    if (typeof picture.data.byteLength === 'number') return picture.data.byteLength > 0
-    return false
+    try {
+        return !!detectImageMime(Buffer.from(picture.data))
+    } catch (e) {
+        return false
+    }
 }
 
 const hasValidEmbeddedCover = (pictures: any) => {
@@ -256,6 +337,43 @@ const hasValidEmbeddedCover = (pictures: any) => {
 
 const isPlaceholderCoverUrl = (url: any) => {
     return typeof url === 'string' && /\/T002R\d+x\d+M000\.jpg(?:$|\?)/.test(url)
+}
+
+const hasUsableRemoteCover = (url: any) => typeof url === 'string' && /^https?:\/\//i.test(url) && !isPlaceholderCoverUrl(url)
+
+const detectAudioContainer = (filePath: string) => {
+    try {
+        const fd = fs.openSync(filePath, 'r')
+        const buffer = Buffer.alloc(16)
+        const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0)
+        fs.closeSync(fd)
+        const head = buffer.subarray(0, bytesRead)
+        if (head.subarray(0, 3).toString('ascii') === 'ID3' || (head.length >= 2 && head[0] === 0xff && (head[1] & 0xe0) === 0xe0)) return 'mp3'
+        if (head.subarray(0, 4).toString('ascii') === 'fLaC') return 'flac'
+        if (head.subarray(0, 4).toString('ascii') === 'OggS') return 'ogg'
+        if (head.subarray(0, 4).toString('ascii') === 'RIFF' && head.subarray(8, 12).toString('ascii') === 'WAVE') return 'wav'
+        if (head.length >= 12 && head.subarray(4, 8).toString('ascii') === 'ftyp') return 'mp4'
+        if (head.subarray(0, 4).toString('ascii') === 'MAC ') return 'ape'
+        if (head[0] === 0x7b) return 'encrypted'
+        return 'unknown'
+    } catch (e) {
+        return 'unknown'
+    }
+}
+
+const getMetadataUnsupportedMessage = (container: string) => (
+    container === 'encrypted'
+        ? '音频为加密或非标准容器，无法写入封面和歌词标签'
+        : '当前音频容器不支持写入封面和歌词标签'
+)
+
+export const getAudioMetadataUnsupportedStatus = (filePath: string) => {
+    const audioContainer = detectAudioContainer(filePath)
+    return {
+        audioContainer,
+        metadataWritable: false,
+        error: getMetadataUnsupportedMessage(audioContainer),
+    }
 }
 
 const readEmbeddedCoverState = (filePath: string) => {
@@ -268,6 +386,52 @@ const readEmbeddedCoverState = (filePath: string) => {
         return false
     } finally {
         try { if (tagger) tagger.dispose() } catch (e) { }
+    }
+}
+
+export const embedLyricsIntoFile = (filePath: string, lyricText: string) => {
+    const audioContainer = detectAudioContainer(filePath)
+    let tagger: any
+    try {
+        tagger = new MusicTagger()
+        tagger.loadPath(filePath)
+        tagger.lyrics = lyricText
+        tagger.save()
+    } catch (e: any) {
+        return {
+            success: false,
+            hasEmbedLyric: false,
+            audioContainer,
+            metadataWritable: false,
+            error: getMetadataUnsupportedMessage(audioContainer),
+        }
+    } finally {
+        try { if (tagger) tagger.dispose() } catch (e) { }
+    }
+
+    let verifyTagger: any
+    try {
+        verifyTagger = new MusicTagger()
+        verifyTagger.loadPath(filePath)
+        const embeddedLyrics = verifyTagger.lyrics
+        const hasEmbedLyric = !!(embeddedLyrics && embeddedLyrics.trim().length > 10)
+        return {
+            success: hasEmbedLyric,
+            hasEmbedLyric,
+            audioContainer,
+            metadataWritable: true,
+            error: hasEmbedLyric ? undefined : '歌词标签写入后校验失败，已保留外置歌词文件',
+        }
+    } catch (e: any) {
+        return {
+            success: false,
+            hasEmbedLyric: false,
+            audioContainer,
+            metadataWritable: false,
+            error: getMetadataUnsupportedMessage(audioContainer),
+        }
+    } finally {
+        try { if (verifyTagger) verifyTagger.dispose() } catch (e) { }
     }
 }
 
@@ -318,7 +482,8 @@ const extractSongMetadata = (songInfo: any) => {
         id: id,
         name: songInfo.name || meta.songName || 'Unknown',
         singer: songInfo.singer || meta.singerName || 'Unknown',
-        album: songInfo.albumName || meta.albumName || '',
+        album: songInfo.albumName || meta.albumName ||
+            (typeof songInfo.album === 'string' ? songInfo.album : songInfo.album?.name) || '',
         albumId: String(songInfo.albumId || meta.albumId || ''),
         img: songInfo.img || meta.picUrl || '',
         interval: songInfo.interval || meta.interval || '',
@@ -330,7 +495,8 @@ const extractSongMetadata = (songInfo: any) => {
  * Detect quality tag from bitrate and file metadata
  */
 const detectQualityFromBitrate = (bitrate: number | undefined, ext: string, tagger?: any): LX.Quality => {
-    const isLossless = (ext === '.flac' || ext === '.wav' || ext === '.ape')
+    const nativeQuality = String(tagger?.quality || '').toLowerCase()
+    const isLossless = ext === '.flac' || ext === '.wav' || ext === '.ape' || nativeQuality === 'sq' || nativeQuality === 'hires'
     const br = bitrate || 0 // Already in kbps from music-tag-native
 
     if (isLossless) {
@@ -348,6 +514,74 @@ const detectQualityFromBitrate = (bitrate: number | undefined, ext: string, tagg
     return '128k'
 }
 
+const losslessQualitySet = new Set(['flac', 'flac24bit', 'hires', 'atmos', 'atmos_plus', 'master', 'ape', 'wav'])
+
+const isClearlyLossyAudio = (container: string, tagger?: any) => {
+    const nativeQuality = String(tagger?.quality || '').toLowerCase()
+    return nativeQuality === 'hq' || container === 'mp3' || container === 'ogg'
+}
+
+const resolveInspectedQuality = (requestedQuality: string | undefined, detectedQuality: string, container: string, tagger?: any) => {
+    if (isClearlyLossyAudio(container, tagger)) return detectedQuality
+    if (requestedQuality && losslessQualitySet.has(requestedQuality)) return requestedQuality
+    return detectedQuality
+}
+
+const needsQualityCorrection = (quality: string | undefined, container: string) => (
+    !!quality && losslessQualitySet.has(quality) && (container === 'mp3' || container === 'ogg')
+)
+
+const inspectAudioFile = (filePath: string, requestedQuality?: string) => {
+    const audioContainer = detectAudioContainer(filePath)
+    const ext = audioContainer === 'unknown' || audioContainer === 'encrypted'
+        ? path.extname(filePath).toLowerCase()
+        : `.${audioContainer === 'mp4' ? 'm4a' : audioContainer}`
+    let tagger: any
+    try {
+        tagger = new MusicTagger()
+        tagger.loadPath(filePath)
+        const bitrate = Number(tagger.bitRate) || undefined
+        const detectedQuality = detectQualityFromBitrate(bitrate, ext, tagger)
+        return {
+            audioContainer,
+            extension: ext,
+            quality: resolveInspectedQuality(requestedQuality, detectedQuality, audioContainer, tagger),
+            bitrate,
+            sampleRate: Number(tagger.sampleRate) || undefined,
+            bitDepth: Number(tagger.bitDepth) || undefined,
+        }
+    } catch (e) {
+        const detectedQuality = detectQualityFromBitrate(undefined, ext)
+        return {
+            audioContainer,
+            extension: ext,
+            quality: needsQualityCorrection(requestedQuality, audioContainer) ? detectedQuality : (requestedQuality || detectedQuality),
+            bitrate: undefined,
+            sampleRate: undefined,
+            bitDepth: undefined,
+        }
+    } finally {
+        try { if (tagger) tagger.dispose() } catch (e) { }
+    }
+}
+
+export const detectDownloadSource = (rawUrl: string, fallbackSource?: string) => {
+    let value = String(rawUrl || '').toLowerCase()
+    try { value = decodeURIComponent(value) } catch (e) { }
+
+    const sourcePatterns: Array<[string, RegExp]> = [
+        ['kw', /(?:^|[./])(?:kuwo\.cn|kuwo\.com)(?:[/:?]|$)/],
+        ['wy', /(?:^|[./])(?:music\.126\.net|music\.163\.com|163yun\.com)(?:[/:?]|$)/],
+        ['tx', /(?:^|[./])(?:qqmusic\.qq\.com|music\.tc\.qq\.com|stream\.qqmusic\.qq\.com)(?:[/:?]|$)/],
+        ['kg', /(?:^|[./])(?:kugou\.com|kugou\.net)(?:[/:?]|$)/],
+        ['mg', /(?:^|[./])(?:migu\.cn|miguvideo\.com|cmvideo\.cn)(?:[/:?]|$)/],
+    ]
+    for (const [source, pattern] of sourcePatterns) {
+        if (pattern.test(value)) return source
+    }
+    return fallbackSource || undefined
+}
+
 // Generate consistent filename based on pattern with collision handling
 const getFileName = (songInfo: any, quality?: string, isOnlyDownload?: boolean, username?: string) => {
     const sanitizeFilename = (str: any) => String(str || '').replace(/[\\/:*?"<>|]/g, '_')
@@ -357,14 +591,14 @@ const getFileName = (songInfo: any, quality?: string, isOnlyDownload?: boolean, 
     const q = quality || songInfo.quality || 'unknown'
     const nameStr = sanitizeFilename(songInfo.name || 'Unknown')
     const singerStr = sanitizeFilename(songInfo.singer || 'Unknown')
+    const albumValue = songInfo.albumName || songInfo.meta?.albumName ||
+        (typeof songInfo.album === 'string' ? songInfo.album : songInfo.album?.name) ||
+        'Unknown Album'
+    const albumStr = sanitizeFilename(albumValue)
 
     let baseName = ''
     if (currentNamingPattern === CACHE_NAMING_PATTERNS.SIMPLE) {
-        baseName = `${nameStr} - ${singerStr} - ${sanitizeFilename(q)}`
-    } else if (currentNamingPattern === CACHE_NAMING_PATTERNS.ARTIST_TITLE) {
-        baseName = `${singerStr} - ${nameStr} - ${sanitizeFilename(q)}`
-    } else if (currentNamingPattern === CACHE_NAMING_PATTERNS.TITLE_ONLY) {
-        baseName = `${nameStr} - ${sanitizeFilename(q)}`
+        baseName = `${nameStr} - ${singerStr} - ${sanitizeFilename(q)} - ${albumStr}`
     } else {
         // Default/Standard: {Name}_-_{Singer}_-_{Source}_-_{ID}_-_{Quality}
         baseName = `${nameStr}_-_${singerStr}_-_${sanitizeFilename(source)}_-_${sanitizeFilename(id)}_-_${sanitizeFilename(q)}`
@@ -377,22 +611,24 @@ const getFileName = (songInfo: any, quality?: string, isOnlyDownload?: boolean, 
         const normalizedUsername = (username && username !== '_open' && username !== 'default') ? username : '_open'
         const existingItems = indexManager.getAll(normalizedUsername, folder)
 
-        // Find if ANY other version of the same song (Name + Singer + Quality) exists with a different ID
-        const conflict = existingItems.find(item =>
-            item.name.toLowerCase() === String(songInfo.name || '').toLowerCase() &&
-            item.singer.toLowerCase() === String(songInfo.singer || '').toLowerCase() &&
-            item.quality === q &&
-            item.id !== id
-        )
+        const normalizedName = nameStr.toLowerCase()
+        const normalizedSinger = singerStr.toLowerCase()
+        const normalizedQuality = sanitizeFilename(q).toLowerCase()
+        const normalizedAlbum = albumStr.toLowerCase()
+
+        // The album is part of the simple filename, so different album editions do not collide.
+        const conflict = existingItems.find(item => {
+            const itemAlbumValue = item.album || 'Unknown Album'
+            return sanitizeFilename(item.name || 'Unknown').toLowerCase() === normalizedName &&
+                sanitizeFilename(item.singer || 'Unknown').toLowerCase() === normalizedSinger &&
+                sanitizeFilename(item.quality || 'unknown').toLowerCase() === normalizedQuality &&
+                sanitizeFilename(itemAlbumValue).toLowerCase() === normalizedAlbum &&
+                normalizeSongId(item) !== id
+        })
 
         if (conflict) {
-            if (conflict.source !== source) {
-                // Different source -> add (source)
-                baseName += ` (${source})`
-            } else if (conflict.songmid !== id && conflict.id !== id) {
-                // Same source, different mid -> add (source mid)
-                baseName += ` (${source} ${id})`
-            }
+            // The normalized ID already includes the source prefix when needed.
+            baseName += ` (${sanitizeFilename(id || source || 'duplicate')})`
         }
     }
 
@@ -408,9 +644,8 @@ const sanitize = (str: any) => String(str || '').replace(/[\\/:*?"<>|]/g, '_')
 /**
  * Sync disk files with index database
  */
-export const syncCacheIndex = async (username?: string) => {
+export const syncCacheIndex = async (username?: string, roots: Array<'cache' | 'music'> = ['cache', 'music']) => {
     const normalizedUsername = (username && username !== '_open' && username !== 'default') ? username : '_open'
-    const roots: Array<'cache' | 'music'> = ['cache', 'music']
     const extensions = ['.mp3', '.flac', '.m4a', '.ogg', '.wav']
 
     for (const folder of roots) {
@@ -488,12 +723,13 @@ export const syncCacheIndex = async (username?: string) => {
                     songId = segments[3]
                     quality = segments[4]
                 } else {
-                    // Try simple pattern: Name - Singer - Quality
+                    // Try simple pattern: Name - Singer - Quality - Album
                     const segmentsShort = nameWithoutExt.split(' - ')
                     if (segmentsShort.length >= 2) {
                         songName = segmentsShort[0]
                         singer = segmentsShort[1]
                         quality = segmentsShort[2] || 'unknown'
+                        album = segmentsShort.slice(3).join(' - ')
                         songId = nameWithoutExt // Fallback ID for unknown files
                     } else {
                         // Fallback for completely unknown filenames (e.g. download_4.mp3)
@@ -518,10 +754,13 @@ export const syncCacheIndex = async (username?: string) => {
                 existing.coverCheckedVersion !== COVER_CHECK_VERSION ||
                 existing.coverCheckedMtime !== stats.mtimeMs ||
                 existing.coverCheckedSize !== stats.size ||
-                existing.hasCover === undefined
+                existing.hasCover === undefined ||
+                (existing.coverType === 'cached' && !hasCachedCover(file, normalizedUsername, stats))
+            const currentAudioContainer = existing?.audioContainer || detectAudioContainer(filePath)
+            const qualityCorrectionNeeded = !!existing && needsQualityCorrection(existing.quality, currentAudioContainer)
 
             // Update or add to index if anything changed (size, mtime, lyric status, or cover status)
-            if (!existing || existing.size !== stats.size || existing.hasLyric !== hasLyricOnDisk || needsCoverCheck || !existing.interval || existing.quality === 'unknown' || !existing.bitrate) {
+            if (!existing || existing.size !== stats.size || existing.hasLyric !== hasLyricOnDisk || needsCoverCheck || !existing.interval || existing.quality === 'unknown' || !existing.bitrate || qualityCorrectionNeeded) {
                 if (existing) {
                     existing.size = stats.size
                     existing.mtime = stats.mtimeMs
@@ -534,34 +773,56 @@ export const syncCacheIndex = async (username?: string) => {
                     }
 
                     if (needsCoverCheck) {
-                        const actualHasCover = readEmbeddedCoverState(filePath)
+                        const hasEmbeddedCover = readEmbeddedCoverState(filePath)
+                        const hasExternalCover = !hasEmbeddedCover && hasCachedCover(file, normalizedUsername, stats)
+                        const coverType: CacheItem['coverType'] = hasEmbeddedCover
+                            ? 'embedded'
+                            : hasExternalCover
+                                ? 'cached'
+                                : hasUsableRemoteCover(existing.img)
+                                    ? 'remote'
+                                    : 'none'
+                        const actualHasCover = coverType !== 'none'
                         if (existing.hasCover !== actualHasCover) updated = true
                         existing.hasCover = actualHasCover
+                        existing.coverType = coverType
                         existing.coverCheckedVersion = COVER_CHECK_VERSION
                         existing.coverCheckedMtime = stats.mtimeMs
                         existing.coverCheckedSize = stats.size
                     }
 
                     // If interval or quality/bitrate is missing/unknown, or hasEmbedLyric not yet detected, try to extract it
-                    if (!existing.interval || existing.quality === 'unknown' || !existing.bitrate || existing.hasEmbedLyric === undefined) {
+                    if (!existing.interval || existing.quality === 'unknown' || !existing.bitrate || existing.hasEmbedLyric === undefined || existing.metadataWritable === undefined || qualityCorrectionNeeded) {
+                        let tagger: any
                         try {
-                            const tagger = new MusicTagger()
+                            tagger = new MusicTagger()
                             tagger.loadPath(filePath)
                             const dur = tagger.duration
                             if (dur && !existing.interval) existing.interval = formatPlayTime(dur / 1000)
                             existing.bitrate = tagger.bitRate
                             existing.sampleRate = tagger.sampleRate
                             existing.bitDepth = tagger.bitDepth
-                            if (!existing.quality || existing.quality === 'unknown') {
-                                existing.quality = detectQualityFromBitrate(tagger.bitRate, ext, tagger)
+                            if (!existing.quality || existing.quality === 'unknown' || qualityCorrectionNeeded) {
+                                const detectedQuality = detectQualityFromBitrate(tagger.bitRate, ext, tagger)
+                                existing.quality = resolveInspectedQuality(existing.quality, detectedQuality, currentAudioContainer, tagger)
                             }
                             // [新增] 检测是否已嵌入歌词 USLT 标签
                             if (existing.hasEmbedLyric === undefined) {
                                 const lyricsInTag = tagger.lyrics
                                 existing.hasEmbedLyric = !!(lyricsInTag && lyricsInTag.trim().length > 10)
                             }
-                            tagger.dispose()
-                        } catch (e) { }
+                            existing.audioContainer = currentAudioContainer
+                            existing.metadataWritable = true
+                            existing.metadataError = undefined
+                        } catch (e: any) {
+                            existing.audioContainer = currentAudioContainer
+                            existing.metadataWritable = false
+                            existing.metadataError = getMetadataUnsupportedMessage(existing.audioContainer)
+                            existing.hasEmbedLyric = false
+                        } finally {
+                            try { if (tagger) tagger.dispose() } catch (e) { }
+                        }
+                        updated = true
                     }
                     if (existing.size !== stats.size || existing.hasLyric !== hasLyricOnDisk) updated = true
                     finalQuality = existing.quality
@@ -572,6 +833,9 @@ export const syncCacheIndex = async (username?: string) => {
                     let sampleRate: number | undefined
                     let bitDepth: number | undefined
                     let hasEmbedLyric = false
+                    let metadataWritable = false
+                    let metadataError: string | undefined
+                    const audioContainer = detectAudioContainer(filePath)
 
                     try {
                         const tagger = new MusicTagger()
@@ -592,9 +856,20 @@ export const syncCacheIndex = async (username?: string) => {
                         // [新增] 检测是否已嵌入歌词 USLT 标签
                         const lyricsInTag = tagger.lyrics
                         hasEmbedLyric = !!(lyricsInTag && lyricsInTag.trim().length > 10)
+                        metadataWritable = true
 
                         tagger.dispose()
-                    } catch (e) { }
+                    } catch (e: any) {
+                        metadataError = getMetadataUnsupportedMessage(audioContainer)
+                    }
+                    const hasExternalCover = !hasCover && hasCachedCover(file, normalizedUsername, stats)
+                    if (hasExternalCover) hasCover = true
+                    const coverType: CacheItem['coverType'] = hasCover && !hasExternalCover
+                        ? 'embedded'
+                        : hasExternalCover
+                            ? 'cached'
+                            : 'none'
+                    hasCover = coverType !== 'none'
 
                     const item: CacheItem = {
                         id: normalizedId,
@@ -615,8 +890,12 @@ export const syncCacheIndex = async (username?: string) => {
                         lyricFilename: hasLyricOnDisk ? lrcFile : undefined,
                         ext: ext.replace('.', ''),
                         hasCover: hasCover,
+                        coverType,
                         hasLyric: hasLyricOnDisk,
                         hasEmbedLyric,
+                        audioContainer,
+                        metadataWritable,
+                        metadataError,
                         coverCheckedVersion: COVER_CHECK_VERSION,
                         coverCheckedMtime: stats.mtimeMs,
                         coverCheckedSize: stats.size,
@@ -760,6 +1039,8 @@ export const batchRenameCacheFiles = async (username: string | undefined) => {
             try {
                 if (fs.existsSync(oldPath)) {
                     if (!fs.existsSync(newPath)) {
+                        const oldStats = fs.statSync(oldPath)
+                        const externalCover = readCoverCache(item.filename, normalizedUsername, oldStats)
                         fs.renameSync(oldPath, newPath)
 
                         if (item.lyricFilename) {
@@ -773,6 +1054,11 @@ export const batchRenameCacheFiles = async (username: string | undefined) => {
                         }
 
                         item.filename = newFilename
+                        if (externalCover) {
+                            writeCoverCache(newFilename, normalizedUsername, externalCover.data, externalCover.mime, fs.statSync(newPath))
+                            item.coverType = 'cached'
+                            item.hasCover = true
+                        }
                         successCount++
                         folderUpdated = true
                     } else {
@@ -825,12 +1111,19 @@ export const batchUpdateMetadata = async (filenames: string[], username: string 
 
         try {
             let imageBuffer: Buffer | undefined
+            let imageMime = 'image/jpeg'
             const imageUrl = item.img
             if (imageUrl && imageUrl.startsWith('http') && !isPlaceholderCoverUrl(imageUrl)) {
                 const chunks: Buffer[] = []
                 const p = imageUrl.startsWith('https') ? https : http
                 imageBuffer = await new Promise<Buffer>((resolveI, rejectI) => {
                     const req = p.get(imageUrl, ires => {
+                        if ((ires.statusCode || 500) >= 400) {
+                            ires.resume()
+                            rejectI(new Error(`Cover status: ${ires.statusCode}`))
+                            return
+                        }
+                        imageMime = String(ires.headers['content-type'] || 'image/jpeg').split(';')[0]
                         ires.on('data', c => chunks.push(c))
                         ires.on('end', () => resolveI(Buffer.concat(chunks)))
                         ires.on('error', rejectI)
@@ -840,24 +1133,42 @@ export const batchUpdateMetadata = async (filenames: string[], username: string 
                 }).catch(() => undefined)
             }
 
-            const tagger = new MusicTagger()
-            tagger.loadPath(filePath)
-            tagger.title = item.name || 'Unknown'
-            tagger.artist = item.singer || 'Unknown'
-            if (item.album) tagger.album = item.album
-
-            if (imageBuffer && imageBuffer.length > 0) {
-                tagger.pictures = [new MetaPicture('image/jpeg', new Uint8Array(imageBuffer), 'Cover')]
-                item.hasCover = true
-            } else if (hasValidEmbeddedCover(tagger.pictures)) {
-                item.hasCover = true
-            } else {
-                item.hasCover = false
+            let tagger: any
+            let taggerError: any
+            try {
+                tagger = new MusicTagger()
+                tagger.loadPath(filePath)
+                tagger.title = item.name || 'Unknown'
+                tagger.artist = item.singer || 'Unknown'
+                if (item.album) tagger.album = item.album
+                if (imageBuffer && imageBuffer.length > 0) {
+                    tagger.pictures = [new MetaPicture(imageMime, new Uint8Array(imageBuffer), 'Cover')]
+                }
+                tagger.save()
+            } catch (e) {
+                taggerError = e
+            } finally {
+                try { if (tagger) tagger.dispose() } catch (e) { }
             }
-            tagger.save()
-            tagger.dispose()
 
             const stats = fs.statSync(filePath)
+            const hasEmbeddedCover = readEmbeddedCoverState(filePath)
+            let hasCover = hasEmbeddedCover || hasCachedCover(item.filename, normalizedUsername, stats)
+            if (!hasCover && imageBuffer?.length) {
+                hasCover = writeCoverCache(item.filename, normalizedUsername, imageBuffer, imageMime, stats)
+                if (taggerError) {
+                    console.warn(`[FileCache] Audio tags are unavailable for ${filename}; using external cover cache`)
+                }
+            }
+            if (taggerError && !hasCover) throw taggerError
+            item.hasCover = hasCover
+            item.coverType = hasEmbeddedCover ? 'embedded' : hasCover ? 'cached' : hasUsableRemoteCover(item.img) ? 'remote' : 'none'
+            item.metadataWritable = !taggerError
+            item.audioContainer = detectAudioContainer(filePath)
+            item.metadataError = taggerError ? getMetadataUnsupportedMessage(item.audioContainer) : undefined
+            item.coverCheckedVersion = COVER_CHECK_VERSION
+            item.coverCheckedMtime = stats.mtimeMs
+            item.coverCheckedSize = stats.size
             item.mtime = stats.mtimeMs
             item.size = stats.size
 
@@ -954,10 +1265,70 @@ export const linkLocalFile = async (oldFilename: string, songInfo: any, username
 }
 
 
+const downloadCoverImage = async (imageUrl: string, redirects = 0): Promise<{ data: Buffer; mime: string } | null> => {
+    if (!hasUsableRemoteCover(imageUrl) || redirects > 3) return null
+    return await new Promise((resolve) => {
+        const client = imageUrl.startsWith('https:') ? https : http
+        const req = client.get(imageUrl, response => {
+            const statusCode = response.statusCode || 500
+            if (statusCode >= 300 && statusCode < 400 && response.headers.location) {
+                response.resume()
+                const redirectedUrl = new URL(response.headers.location, imageUrl).toString()
+                void downloadCoverImage(redirectedUrl, redirects + 1).then(resolve)
+                return
+            }
+            if (statusCode >= 400) {
+                response.resume()
+                resolve(null)
+                return
+            }
+            const chunks: Buffer[] = []
+            let received = 0
+            response.on('data', chunk => {
+                const buffer = Buffer.from(chunk)
+                received += buffer.length
+                if (received <= 20 * 1024 * 1024) chunks.push(buffer)
+            })
+            response.on('end', () => {
+                if (received > 20 * 1024 * 1024) {
+                    resolve(null)
+                    return
+                }
+                const data = Buffer.concat(chunks)
+                const mime = detectImageMime(data)
+                resolve(mime ? { data, mime } : null)
+            })
+            response.on('error', () => resolve(null))
+        })
+        req.on('error', () => resolve(null))
+        req.setTimeout(10000, () => {
+            req.destroy()
+            resolve(null)
+        })
+    })
+}
+
+const setIndexCoverState = (filename: string, username: string, coverType: CacheItem['coverType'], stats?: Stats) => {
+    for (const folder of ['cache', 'music'] as const) {
+        const item = indexManager.getAll(username, folder).find(candidate => candidate.filename === filename)
+        if (!item) continue
+        item.coverType = coverType
+        item.hasCover = coverType !== 'none'
+        item.coverCheckedVersion = COVER_CHECK_VERSION
+        if (stats) {
+            item.coverCheckedMtime = stats.mtimeMs
+            item.coverCheckedSize = stats.size
+        }
+        indexManager.save(username, folder)
+        return item
+    }
+    return null
+}
+
 /**
  * Get cover image for a cached file
  */
-export const getCacheCover = (filename: string, username?: string) => {
+export const getCacheCover = async (filename: string, username?: string) => {
     const normalizedUsername = (username && username !== '_open' && username !== 'default') ? username : '_open'
 
     const roots: Array<'cache' | 'music'> = ['cache', 'music']
@@ -969,52 +1340,45 @@ export const getCacheCover = (filename: string, username?: string) => {
             let stats: Stats | undefined
             try {
                 stats = fs.statSync(filePath)
-                const hash = getCoverCacheHash(filename, stats)
-                const coverCacheDir = getCoverCacheDir(normalizedUsername)
-                const binPath = path.join(coverCacheDir, `${hash}.bin`)
-                const mimePath = path.join(coverCacheDir, `${hash}.mime`)
-
-                if (fs.existsSync(binPath) && fs.existsSync(mimePath)) {
-                    const data = fs.readFileSync(binPath)
-                    const mime = fs.readFileSync(mimePath, 'utf8')
-                    if (data.length > 0) return { data, mime }
-                    try {
-                        fs.unlinkSync(binPath)
-                        fs.unlinkSync(mimePath)
-                    } catch (e) { }
+                const cachedCover = readCoverCache(filename, normalizedUsername, stats)
+                if (cachedCover) {
+                    setIndexCoverState(filename, normalizedUsername, 'cached', stats)
+                    return cachedCover
                 }
             } catch (e) {
                 console.error(`[Cache] Error reading cover cache for: ${filename}`, e)
             }
 
+            let tagger: any
             try {
-                const tagger = new MusicTagger()
+                tagger = new MusicTagger()
                 tagger.loadPath(filePath)
                 const pics = tagger.pictures
                 const pic = Array.isArray(pics) ? pics.find(hasValidPictureData) : null
                 if (pic) {
                     const mime = pic.mimeType || 'image/jpeg'
                     const data = Buffer.from(pic.data)
-                    tagger.dispose()
-
-                    // Save to cover cache
-                    try {
-                        const hash = getCoverCacheHash(filename, stats)
-                        const coverCacheDir = getCoverCacheDir(normalizedUsername)
-                        const binPath = path.join(coverCacheDir, `${hash}.bin`)
-                        const mimePath = path.join(coverCacheDir, `${hash}.mime`)
-                        fs.writeFileSync(binPath, data)
-                        fs.writeFileSync(mimePath, mime)
-                    } catch (e) {
-                        console.error(`[Cache] Failed to write cover cache for ${filename}:`, e)
-                    }
-
-                    return { data, mime }
+                    writeCoverCache(filename, normalizedUsername, data, mime, stats)
+                    setIndexCoverState(filename, normalizedUsername, 'embedded', stats)
+                    return { data, mime: detectImageMime(data) || mime }
                 }
-                tagger.dispose()
             } catch (e) {
                 // console.error(`[Cache] Error reading tags for cover: ${filename}`, e)
+            } finally {
+                try { if (tagger) tagger.dispose() } catch (e) { }
             }
+
+            const item = [...indexManager.getAll(normalizedUsername, 'cache'), ...indexManager.getAll(normalizedUsername, 'music')]
+                .find(candidate => candidate.filename === filename)
+            if (item && hasUsableRemoteCover(item.img)) {
+                const remoteCover = await downloadCoverImage(item.img!)
+                if (remoteCover && writeCoverCache(filename, normalizedUsername, remoteCover.data, remoteCover.mime, stats)) {
+                    setIndexCoverState(filename, normalizedUsername, 'cached', stats)
+                    return remoteCover
+                }
+            }
+
+            setIndexCoverState(filename, normalizedUsername, 'none', stats)
         }
     }
     return null
@@ -1203,7 +1567,7 @@ export const checkLyricCache = (songInfo: any, username?: string) => {
         }
     }
 
-    // [Fix] Index-based name+singer fallback for non-standard naming patterns (simple/artist-title)
+    // [Fix] Index-based name+singer fallback for the simple naming pattern
     // When the lrc filename does not contain a song ID, match by name + singer from the index
     if (songInfo.name && songInfo.singer) {
         const targetName = String(songInfo.name).toLowerCase()
@@ -1351,16 +1715,126 @@ export const saveLyricCache = (songInfo: any, lyricsObj: any, username?: string,
     }
 }
 
-export const downloadAndCache = async (songInfo: any, url: string, quality?: string, username?: string, signal?: AbortSignal, isOnlyDownload?: boolean, shouldCacheLyric: boolean = true, shouldEmbedLyric: boolean = true) => {
+const ensureCachedLyrics = async (
+    songInfo: any,
+    quality: string | undefined,
+    username: string | undefined,
+    isOnlyDownload: boolean | undefined,
+    audioPath: string,
+    folder: 'cache' | 'music',
+    shouldCacheLyric: boolean,
+    shouldEmbedLyric: boolean,
+) => {
+    if ((!shouldCacheLyric && !shouldEmbedLyric) || !_lyricFetcher || !fs.existsSync(audioPath)) return
+
+    const normalizedUsername = (username && username !== '_open' && username !== 'default') ? username : '_open'
+    const id = normalizeSongId(songInfo)
+    const resolvedQuality = quality || 'unknown'
+    const relativeAudioPath = path.relative(getCacheDir(normalizedUsername, folder === 'music'), audioPath).replace(/\\/g, '/')
+    const item = indexManager.get(normalizedUsername, id, folder, resolvedQuality, true)
+        || indexManager.getAll(normalizedUsername, folder).find(candidate => candidate.filename === relativeAudioPath)
+    const lyricPath = audioPath.substring(0, audioPath.length - path.extname(audioPath).length) + '.lrc'
+    let hasCachedLyric = fs.existsSync(lyricPath)
+    let hasEmbedLyric = item?.hasEmbedLyric === true
+    let metadataWritable = item?.metadataWritable !== false
+    let metadataError = item?.metadataError
+    let embedLyricError = item?.embedLyricError
+    const audioContainer = item?.audioContainer || detectAudioContainer(audioPath)
+
+    if (shouldEmbedLyric && !hasEmbedLyric && metadataWritable) {
+        let tagger: any
+        try {
+            tagger = new MusicTagger()
+            tagger.loadPath(audioPath)
+            const lyricsInTag = tagger.lyrics
+            hasEmbedLyric = !!(lyricsInTag && lyricsInTag.trim().length > 10)
+        } catch (e: any) {
+            metadataWritable = false
+            metadataError = getMetadataUnsupportedMessage(audioContainer)
+            embedLyricError = metadataError
+        } finally {
+            try { if (tagger) tagger.dispose() } catch (e) { }
+        }
+    }
+
+    const embedRequirementHandled = !shouldEmbedLyric || hasEmbedLyric || !metadataWritable
+    if ((!shouldCacheLyric || hasCachedLyric) && embedRequirementHandled) {
+        if (item && (item.hasLyric !== hasCachedLyric || item.hasEmbedLyric !== hasEmbedLyric || item.metadataWritable !== metadataWritable || item.embedLyricError !== embedLyricError)) {
+            item.hasLyric = hasCachedLyric
+            item.lyricFilename = hasCachedLyric
+                ? path.relative(getCacheDir(normalizedUsername, folder === 'music'), lyricPath).replace(/\\/g, '/')
+                : undefined
+            item.hasEmbedLyric = hasEmbedLyric
+            item.audioContainer = audioContainer
+            item.metadataWritable = metadataWritable
+            item.metadataError = metadataError
+            item.embedLyricError = embedLyricError
+            indexManager.save(normalizedUsername, folder)
+        }
+        return
+    }
+
+    try {
+        const lyricText = await _lyricFetcher({ ...songInfo, quality: resolvedQuality })
+        if (!lyricText) return
+
+        if (shouldCacheLyric && !hasCachedLyric) {
+            const lyricsObj = parseLyrics(lyricText)
+            hasCachedLyric = saveLyricCache(
+                { ...songInfo, quality: resolvedQuality },
+                lyricsObj,
+                username,
+                isOnlyDownload,
+            ) || fs.existsSync(lyricPath)
+        }
+
+        if (shouldEmbedLyric && !hasEmbedLyric && metadataWritable) {
+            const embedResult = embedLyricsIntoFile(audioPath, lyricText)
+            hasEmbedLyric = embedResult.hasEmbedLyric
+            metadataWritable = embedResult.metadataWritable
+            metadataError = embedResult.metadataWritable ? undefined : embedResult.error
+            embedLyricError = embedResult.error
+            if (embedResult.success) {
+                console.log(`[FileCache] USLT lyric embedded for: ${songInfo.name || songInfo.title || path.basename(audioPath)}`)
+            } else {
+                console.warn(`[FileCache] Lyric tag unavailable for ${path.basename(audioPath)}: ${embedResult.error}`)
+            }
+        }
+
+        const finalItem = indexManager.get(normalizedUsername, id, folder, resolvedQuality, true) || item
+        if (finalItem) {
+            if (shouldCacheLyric && hasCachedLyric) {
+                finalItem.hasLyric = true
+                finalItem.lyricFilename = path.relative(getCacheDir(normalizedUsername, folder === 'music'), lyricPath).replace(/\\/g, '/')
+            }
+            if (shouldEmbedLyric) {
+                finalItem.hasEmbedLyric = hasEmbedLyric
+                finalItem.audioContainer = audioContainer
+                finalItem.metadataWritable = metadataWritable
+                finalItem.metadataError = metadataError
+                finalItem.embedLyricError = embedLyricError
+            }
+            indexManager.save(normalizedUsername, folder)
+        }
+    } catch (err: any) {
+        console.warn(`[FileCache] Failed to ensure lyrics for ${path.basename(audioPath)}: ${err?.message || err}`)
+    }
+}
+
+export const downloadAndCache = async (songInfo: any, url: string, quality?: string, username?: string, signal?: AbortSignal, isOnlyDownload?: boolean, shouldCacheLyric: boolean = true, shouldEmbedLyric: boolean = true, provenance: DownloadProvenance = {}) => {
     const dir = ensureDir(username, isOnlyDownload)
     const baseName = getFileName(songInfo, quality, isOnlyDownload, username)
     const tempPath = path.join(dir, baseName + '.tmp')
     const songKey = normalizeSongId(songInfo) + '_' + (quality || 'unknown')
+    const requestedSource = provenance.requestedSource || songInfo.requestedSource || songInfo.source || 'unknown'
+    const downloadSource = detectDownloadSource(url, provenance.downloadSource || songInfo.downloadSource || songInfo.source)
+    const sourceName = provenance.sourceName || songInfo.sourceName
 
     const result = checkCache({ ...songInfo, quality, exactQuality: true }, username, false)
     if (result.exists && !result.isCollision) {
         const targetFolder: 'cache' | 'music' = isOnlyDownload ? 'music' : 'cache'
-        if (result.folder === targetFolder) {
+        if (result.folder === targetFolder && result.path) {
+            await ensureCachedLyrics(songInfo, quality || result.quality, username, isOnlyDownload, result.path, targetFolder, shouldCacheLyric, shouldEmbedLyric)
             console.log(`[FileCache] Song already exists in ${targetFolder}, skipping download: ${result.filename}`)
             // 通知前端轮询：目标目录文件已存在，视为立即完成
             cacheProgress.set(songKey, { progress: 100, status: 'exists' })
@@ -1369,8 +1843,13 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
         }
 
         if (isOnlyDownload && result.folder === 'cache' && result.path) {
-            const ext = path.extname(result.filename || result.path) || '.mp3'
-            const finalPath = path.join(dir, baseName + ext)
+            const requestedOrCachedQuality = quality || result.quality || 'unknown'
+            const inspection = inspectAudioFile(result.path, requestedOrCachedQuality)
+            const actualQuality = inspection.quality || requestedOrCachedQuality
+            const sourceExt = path.extname(result.filename || result.path) || '.mp3'
+            const ext = inspection.extension || sourceExt
+            const finalBaseName = getFileName(songInfo, actualQuality, isOnlyDownload, username)
+            const finalPath = path.join(dir, finalBaseName + ext)
             if (!fs.existsSync(finalPath)) {
                 fs.copyFileSync(result.path, finalPath)
             }
@@ -1378,22 +1857,40 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
             const metadata = extractSongMetadata(songInfo)
             const id = metadata.id || String(songInfo.id || songInfo.songmid)
             const normalizedUsername = (username && username !== '_open' && username !== 'default') ? username : '_open'
+            const cachedItem = getIndexItemByFilename(result.filename, normalizedUsername)
+            const actualDownloadSource = cachedItem?.downloadSource || downloadSource
+            const actualSourceName = cachedItem?.sourceName || sourceName
             const stat = fs.statSync(finalPath)
             let hasCover = false
             let hasEmbedLyric = false
+            let metadataWritable = false
+            const audioContainer = inspection.audioContainer
             try {
                 const tagger = new MusicTagger()
                 tagger.loadPath(finalPath)
                 hasCover = hasValidEmbeddedCover(tagger.pictures)
                 const lyricsInTag = tagger.lyrics
                 hasEmbedLyric = !!(lyricsInTag && lyricsInTag.trim().length > 10)
+                metadataWritable = true
                 tagger.dispose()
             } catch (e) { }
 
+            let coverType: CacheItem['coverType'] = hasCover ? 'embedded' : 'none'
+            if (!hasCover) {
+                const sourceCover = await getCacheCover(result.filename, normalizedUsername)
+                if (sourceCover?.data?.length && writeCoverCache(path.basename(finalPath), normalizedUsername, sourceCover.data, sourceCover.mime, stat)) {
+                    hasCover = true
+                    coverType = 'cached'
+                } else if (hasUsableRemoteCover(metadata.img)) {
+                    hasCover = true
+                    coverType = 'remote'
+                }
+            }
+
             let lyricFilename: string | undefined
-            const sourceLyricPath = result.path.substring(0, result.path.length - ext.length) + '.lrc'
+            const sourceLyricPath = result.path.substring(0, result.path.length - sourceExt.length) + '.lrc'
             if (shouldCacheLyric && fs.existsSync(sourceLyricPath)) {
-                const targetLyricPath = path.join(dir, baseName + '.lrc')
+                const targetLyricPath = path.join(dir, finalBaseName + '.lrc')
                 fs.copyFileSync(sourceLyricPath, targetLyricPath)
                 lyricFilename = path.basename(targetLyricPath)
             }
@@ -1401,15 +1898,25 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
             indexManager.update(normalizedUsername, {
                 id, songmid: id, name: metadata.name, singer: metadata.singer,
                 album: metadata.album, albumId: metadata.albumId, img: metadata.img,
-                interval: metadata.interval, source: metadata.source,
-                quality: quality || result.quality || 'unknown', filename: path.basename(finalPath),
+                interval: metadata.interval, source: metadata.source, requestedSource,
+                downloadSource: actualDownloadSource, sourceName: actualSourceName,
+                quality: actualQuality, filename: path.basename(finalPath),
                 folder: 'music', mtime: Date.now(), size: stat.size,
                 lyricFilename,
                 ext: ext.replace('.', ''),
                 hasCover,
+                coverType,
                 hasLyric: !!lyricFilename,
-                hasEmbedLyric
+                hasEmbedLyric,
+                audioContainer,
+                bitrate: inspection.bitrate,
+                sampleRate: inspection.sampleRate,
+                bitDepth: inspection.bitDepth,
+                metadataWritable,
+                metadataError: metadataWritable ? undefined : getMetadataUnsupportedMessage(audioContainer)
             }, 'music')
+
+            await ensureCachedLyrics(songInfo, actualQuality, username, true, finalPath, 'music', shouldCacheLyric, shouldEmbedLyric)
 
             console.log(`[FileCache] Copied cached song to music folder: ${path.basename(finalPath)}`)
             cacheProgress.set(songKey, { progress: 100, status: 'finished', total: stat.size, received: stat.size })
@@ -1513,7 +2020,11 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
                     } catch (e) { }
                 }
 
-                const finalPath = path.join(dir, baseName + ext)
+                const inspection = inspectAudioFile(tempPath, quality)
+                ext = inspection.extension || ext
+                const actualQuality = inspection.quality || quality || 'unknown'
+                const finalBaseName = getFileName(songInfo, actualQuality, isOnlyDownload, username)
+                const finalPath = path.join(dir, finalBaseName + ext)
                 fs.rename(tempPath, finalPath, async (err) => {
                     if (err) {
                         fs.unlink(tempPath, () => { })
@@ -1522,6 +2033,7 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
                     }
 
                     let imageBuffer: Buffer | undefined
+                    let imageMime = 'image/jpeg'
                     try {
                         const imageUrl = songInfo.img || (songInfo.meta && songInfo.meta.picUrl)
                         if (imageUrl && imageUrl.startsWith('http') && !isPlaceholderCoverUrl(imageUrl)) {
@@ -1534,6 +2046,7 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
                                         rejectI(new Error(`Cover status: ${ires.statusCode}`))
                                         return
                                     }
+                                    imageMime = String(ires.headers['content-type'] || 'image/jpeg').split(';')[0]
                                     ires.on('data', c => chunks.push(c))
                                     ires.on('end', () => resolveI(Buffer.concat(chunks)))
                                     ires.on('error', rejectI)
@@ -1554,47 +2067,60 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
                     indexManager.update(normalizedUsername, {
                         id, songmid: id, name: metadata.name, singer: metadata.singer,
                         album: metadata.album, albumId: metadata.albumId, img: metadata.img,
-                        interval: metadata.interval, source: metadata.source,
-                        quality: quality || 'unknown', filename: baseName + ext,
+                        interval: metadata.interval, source: metadata.source, requestedSource,
+                        downloadSource, sourceName,
+                        quality: actualQuality, filename: finalBaseName + ext,
                         folder: folderType, mtime: Date.now(), size: received,
-                        ext: ext.replace('.', ''), hasCover: !!(imageBuffer && imageBuffer.length > 0), hasLyric: false
+                        ext: ext.replace('.', ''), hasCover: false, hasLyric: false,
+                        audioContainer: inspection.audioContainer,
+                        bitrate: inspection.bitrate,
+                        sampleRate: inspection.sampleRate,
+                        bitDepth: inspection.bitDepth,
                     }, folderType)
 
+                    let tagger: any
+                    let metadataWritable = false
                     try {
-                        const tagger = new MusicTagger()
+                        tagger = new MusicTagger()
                         tagger.loadPath(finalPath)
                         tagger.title = metadata.name
                         tagger.artist = metadata.singer
                         tagger.album = metadata.album
-                        if (imageBuffer && imageBuffer.length > 0) tagger.pictures = [new MetaPicture('image/jpeg', new Uint8Array(imageBuffer), 'Cover')]
+                        if (imageBuffer && imageBuffer.length > 0) tagger.pictures = [new MetaPicture(imageMime, new Uint8Array(imageBuffer), 'Cover')]
                         tagger.save()
-                        tagger.dispose()
-                    } catch (e) { }
-
-                    if ((shouldCacheLyric || shouldEmbedLyric) && _lyricFetcher) {
-                        try {
-                            const lyricText = await _lyricFetcher({ ...songInfo, quality })
-                            if (lyricText) {
-                                if (shouldCacheLyric) {
-                                    const lyricsObj = parseLyrics(lyricText)
-                                    saveLyricCache({ ...songInfo, quality }, lyricsObj, username, isOnlyDownload)
-                                }
-                                if (shouldEmbedLyric) {
-                                    const tagger2 = new MusicTagger()
-                                    tagger2.loadPath(finalPath)
-                                    tagger2.lyrics = lyricText
-                                    tagger2.save()
-                                    tagger2.dispose()
-                                    console.log(`[FileCache] USLT lyric embedded for: ${metadata.name}`)
-                                    const finalItem = indexManager.get(normalizedUsername, id, folderType, quality || 'unknown')
-                                    if (finalItem) {
-                                        ;(finalItem as any).hasEmbedLyric = true
-                                        indexManager.save(normalizedUsername, folderType)
-                                    }
-                                }
-                            }
-                        } catch (e) { /* Lyric cache/embed failure must not fail the audio cache. */ }
+                        metadataWritable = true
+                    } catch (e) {
+                    } finally {
+                        try { if (tagger) tagger.dispose() } catch (e) { }
                     }
+
+                    const taggedStats = fs.statSync(finalPath)
+                    let finalHasCover = readEmbeddedCoverState(finalPath)
+                    if (!finalHasCover && imageBuffer?.length) {
+                        finalHasCover = writeCoverCache(finalBaseName + ext, normalizedUsername, imageBuffer, imageMime, taggedStats)
+                    }
+                    const taggedItem = indexManager.get(normalizedUsername, id, folderType, actualQuality)
+                    if (taggedItem) {
+                        taggedItem.coverType = readEmbeddedCoverState(finalPath)
+                            ? 'embedded'
+                            : finalHasCover
+                                ? 'cached'
+                                : hasUsableRemoteCover(metadata.img)
+                                    ? 'remote'
+                                    : 'none'
+                        taggedItem.hasCover = taggedItem.coverType !== 'none'
+                        taggedItem.audioContainer = inspection.audioContainer
+                        taggedItem.metadataWritable = metadataWritable
+                        taggedItem.metadataError = metadataWritable ? undefined : getMetadataUnsupportedMessage(taggedItem.audioContainer)
+                        taggedItem.coverCheckedVersion = COVER_CHECK_VERSION
+                        taggedItem.coverCheckedMtime = taggedStats.mtimeMs
+                        taggedItem.coverCheckedSize = taggedStats.size
+                        taggedItem.mtime = taggedStats.mtimeMs
+                        taggedItem.size = taggedStats.size
+                        indexManager.save(normalizedUsername, folderType)
+                    }
+
+                    await ensureCachedLyrics(songInfo, actualQuality, username, isOnlyDownload, finalPath, folderType, shouldCacheLyric, shouldEmbedLyric)
 
                     cacheProgress.set(songKey, { progress: 100, status: 'finished', total: total || received, received, speed: 0, updatedAt: Date.now() })
                     setTimeout(() => cacheProgress.delete(songKey), 30000)
@@ -1608,6 +2134,249 @@ export const downloadAndCache = async (songInfo: any, url: string, quality?: str
             req.destroy(new Error('Download request timeout'))
         })
     })
+}
+
+const normalizeCacheUsername = (username?: string) => (
+    username && username !== '_open' && username !== 'default' ? username : '_open'
+)
+
+const resolveMusicPath = (root: string, relativePath: string) => {
+    const resolvedRoot = path.resolve(root)
+    const resolvedPath = path.resolve(root, relativePath)
+    if (resolvedPath !== resolvedRoot && !resolvedPath.startsWith(resolvedRoot + path.sep)) {
+        throw new Error('Invalid music file path')
+    }
+    return resolvedPath
+}
+
+const getAvailableRemasterTarget = (
+    root: string,
+    subPath: string,
+    preferredBaseName: string,
+    extension: string,
+    oldAudioPath: string,
+    oldLyricPath: string,
+    needsLyric: boolean,
+) => {
+    for (let index = 0; index < 10000; index++) {
+        const suffix = index === 0 ? '' : ` (${index + 1})`
+        const baseName = preferredBaseName.substring(0, Math.max(1, 200 - suffix.length)) + suffix
+        const audioFilename = path.join(subPath, baseName + extension).replace(/\\/g, '/').replace(/^\.\//, '')
+        const lyricFilename = path.join(subPath, baseName + '.lrc').replace(/\\/g, '/').replace(/^\.\//, '')
+        const audioPath = resolveMusicPath(root, audioFilename)
+        const lyricPath = resolveMusicPath(root, lyricFilename)
+        const audioConflict = audioPath !== oldAudioPath && fs.existsSync(audioPath)
+        const lyricConflict = needsLyric && lyricPath !== oldLyricPath && fs.existsSync(lyricPath)
+        if (!audioConflict && !lyricConflict) {
+            return { audioFilename, lyricFilename, audioPath, lyricPath }
+        }
+    }
+    throw new Error('无法生成不冲突的目标文件名')
+}
+
+export const getDownloadedMusicItems = async (username?: string) => {
+    const normalizedUsername = normalizeCacheUsername(username)
+    await syncCacheIndex(normalizedUsername, ['music'])
+    return indexManager.getAll(normalizedUsername, 'music').map(item => ({ ...item }))
+}
+
+export const replaceDownloadedMusicItem = async (
+    username: string,
+    originalItem: CacheItem,
+    songInfo: any,
+    url: string,
+    quality: string,
+    signal?: AbortSignal,
+) => {
+    const normalizedUsername = normalizeCacheUsername(username)
+    const root = getCacheDir(normalizedUsername, true)
+    const currentItem = indexManager.get(normalizedUsername, originalItem.id, 'music', originalItem.quality, true)
+    if (!currentItem || currentItem.filename !== originalItem.filename) {
+        throw new Error('原文件已发生变化或已不存在')
+    }
+    if (quality === currentItem.quality) throw new Error('实际音质与原音质相同，无需替换')
+
+    const oldAudioPath = resolveMusicPath(root, currentItem.filename)
+    if (!fs.existsSync(oldAudioPath)) throw new Error('原文件已不存在')
+
+    const stageId = crypto.randomBytes(12).toString('hex')
+    const stageUsername = `.remaster-staging/${stageId}`
+    const stageRoot = getCacheDir(stageUsername, true)
+    const stageCoverRoot = getCoverCacheDir(stageUsername)
+    const backupSuffix = `.remaster-${crypto.randomBytes(6).toString('hex')}.bak`
+    const oldAudioBackup = oldAudioPath + backupSuffix
+    let oldLyricPath = ''
+    let oldLyricBackup = ''
+    let targetAudioPath = ''
+    let targetLyricPath = ''
+    let replacementItem: CacheItem | null = null
+    let backedUpOldAudio = false
+    let backedUpOldLyric = false
+    let installedNewAudio = false
+    let installedNewLyric = false
+    let updatedNewIndex = false
+    let removedOldIndex = false
+
+    try {
+        await downloadAndCache(songInfo, url, quality, stageUsername, signal, true, true, true)
+        if (signal?.aborted) throw new Error('Aborted')
+
+        const stagedItems = indexManager.getAll(stageUsername, 'music')
+        const downloadedItem = stagedItems.find(item => item.quality === quality)
+        if (!downloadedItem) throw new Error('新音质文件未写入暂存索引')
+
+        const sourceAudioPath = resolveMusicPath(stageRoot, downloadedItem.filename)
+        const sourceStats = fs.existsSync(sourceAudioPath) ? fs.statSync(sourceAudioPath) : null
+        if (!sourceStats?.isFile() || sourceStats.size <= 0) throw new Error('新音质文件无效或为空')
+        const stagedHasCover = readEmbeddedCoverState(sourceAudioPath)
+        const originalCover = stagedHasCover
+            ? null
+            : ((await getCacheCover(downloadedItem.filename, stageUsername)) || (await getCacheCover(currentItem.filename, normalizedUsername)))
+
+        oldLyricPath = currentItem.lyricFilename ? resolveMusicPath(root, currentItem.lyricFilename) : ''
+        oldLyricBackup = oldLyricPath ? oldLyricPath + backupSuffix : ''
+        const sourceLyricPath = downloadedItem.lyricFilename
+            ? resolveMusicPath(stageRoot, downloadedItem.lyricFilename)
+            : ''
+        const targetSubPath = currentItem.subPath || ''
+        const downloadedExtension = path.extname(downloadedItem.filename) || `.${downloadedItem.ext || 'mp3'}`
+        const preferredBaseName = getFileName(songInfo, quality, true, normalizedUsername)
+        const target = getAvailableRemasterTarget(
+            root,
+            targetSubPath,
+            preferredBaseName,
+            downloadedExtension,
+            oldAudioPath,
+            oldLyricPath,
+            !!((sourceLyricPath && fs.existsSync(sourceLyricPath)) || (oldLyricPath && fs.existsSync(oldLyricPath))),
+        )
+        const targetFilename = target.audioFilename
+        const targetLyricFilename = target.lyricFilename
+        targetAudioPath = target.audioPath
+        targetLyricPath = target.lyricPath
+
+        fs.renameSync(oldAudioPath, oldAudioBackup)
+        backedUpOldAudio = true
+        if (oldLyricPath && fs.existsSync(oldLyricPath)) {
+            fs.renameSync(oldLyricPath, oldLyricBackup)
+            backedUpOldLyric = true
+        }
+
+        fs.mkdirSync(path.dirname(targetAudioPath), { recursive: true })
+        safeRenameSync(sourceAudioPath, targetAudioPath)
+        installedNewAudio = true
+
+        let finalHasCover = readEmbeddedCoverState(targetAudioPath)
+        if (!finalHasCover && originalCover?.data?.length) {
+            let tagger: any
+            try {
+                tagger = new MusicTagger()
+                tagger.loadPath(targetAudioPath)
+                tagger.pictures = [
+                    new MetaPicture(originalCover.mime || 'image/jpeg', new Uint8Array(originalCover.data), 'Cover'),
+                ]
+                tagger.save()
+            } catch (e) {
+                console.warn(`[FileCache] Unable to embed the original cover in ${targetFilename}; using external cover cache`)
+            } finally {
+                try { if (tagger) tagger.dispose() } catch (e) { }
+            }
+            finalHasCover = readEmbeddedCoverState(targetAudioPath)
+        }
+
+        let finalLyricFilename: string | undefined
+        if (sourceLyricPath && fs.existsSync(sourceLyricPath)) {
+            fs.mkdirSync(path.dirname(targetLyricPath), { recursive: true })
+            if (sourceLyricPath !== targetLyricPath) {
+                safeRenameSync(sourceLyricPath, targetLyricPath)
+                installedNewLyric = true
+            }
+            finalLyricFilename = targetLyricFilename
+        } else if (backedUpOldLyric && fs.existsSync(oldLyricBackup)) {
+            fs.mkdirSync(path.dirname(targetLyricPath), { recursive: true })
+            fs.copyFileSync(oldLyricBackup, targetLyricPath)
+            installedNewLyric = true
+            finalLyricFilename = targetLyricFilename
+        }
+
+        const finalStats = fs.statSync(targetAudioPath)
+        if (!finalHasCover && originalCover?.data?.length) {
+            finalHasCover = writeCoverCache(
+                targetFilename,
+                normalizedUsername,
+                originalCover.data,
+                originalCover.mime || 'image/jpeg',
+                finalStats,
+            )
+        }
+        replacementItem = {
+            ...downloadedItem,
+            id: currentItem.id,
+            songmid: currentItem.songmid || currentItem.id,
+            source: currentItem.source,
+            filename: targetFilename,
+            folder: 'music',
+            subPath: targetSubPath,
+            lyricFilename: finalLyricFilename,
+            hasLyric: !!finalLyricFilename,
+            hasCover: finalHasCover,
+            coverType: readEmbeddedCoverState(targetAudioPath) ? 'embedded' : finalHasCover ? 'cached' : hasUsableRemoteCover(downloadedItem.img) ? 'remote' : 'none',
+            coverCheckedVersion: COVER_CHECK_VERSION,
+            coverCheckedMtime: finalStats.mtimeMs,
+            coverCheckedSize: finalStats.size,
+            mtime: finalStats.mtimeMs,
+            size: finalStats.size,
+        }
+        replacementItem.hasCover = replacementItem.coverType !== 'none'
+        indexManager.update(normalizedUsername, replacementItem, 'music')
+        updatedNewIndex = true
+        indexManager.remove(normalizedUsername, currentItem.id, 'music', currentItem.quality)
+        removedOldIndex = true
+
+        try {
+            if (backedUpOldAudio && fs.existsSync(oldAudioBackup)) fs.unlinkSync(oldAudioBackup)
+        } catch (cleanupError) {
+            console.warn('[FileCache] Failed to remove remaster audio backup:', cleanupError)
+        }
+        try {
+            if (backedUpOldLyric && fs.existsSync(oldLyricBackup)) fs.unlinkSync(oldLyricBackup)
+        } catch (cleanupError) {
+            console.warn('[FileCache] Failed to remove remaster lyric backup:', cleanupError)
+        }
+        return { ...replacementItem }
+    } catch (err) {
+        try {
+            if (updatedNewIndex && replacementItem) {
+                indexManager.remove(normalizedUsername, replacementItem.id, 'music', replacementItem.quality)
+            }
+            if (installedNewLyric && targetLyricPath && fs.existsSync(targetLyricPath)) fs.unlinkSync(targetLyricPath)
+            if (installedNewAudio && targetAudioPath && fs.existsSync(targetAudioPath)) fs.unlinkSync(targetAudioPath)
+            if (backedUpOldAudio && fs.existsSync(oldAudioBackup) && !fs.existsSync(oldAudioPath)) {
+                fs.renameSync(oldAudioBackup, oldAudioPath)
+            }
+            if (backedUpOldLyric && fs.existsSync(oldLyricBackup) && !fs.existsSync(oldLyricPath)) {
+                fs.renameSync(oldLyricBackup, oldLyricPath)
+            }
+            if (removedOldIndex || updatedNewIndex) {
+                indexManager.update(normalizedUsername, currentItem, 'music')
+            }
+        } catch (rollbackError) {
+            console.error('[FileCache] Failed to roll back remaster replacement:', rollbackError)
+        }
+        throw err
+    } finally {
+        indexManager.discard(stageUsername, 'music')
+        try {
+            if (fs.existsSync(stageRoot)) fs.rmSync(stageRoot, { recursive: true, force: true })
+        } catch (cleanupError) {
+            console.warn('[FileCache] Failed to clean remaster staging directory:', cleanupError)
+        }
+        try {
+            if (fs.existsSync(stageCoverRoot)) fs.rmSync(stageCoverRoot, { recursive: true, force: true })
+        } catch (cleanupError) {
+            console.warn('[FileCache] Failed to clean remaster cover staging directory:', cleanupError)
+        }
+    }
 }
 
 export const stopUserTasks = (username: string, songKey?: string) => {
@@ -1637,13 +2406,19 @@ export const getIndexItemByFilename = (filename: string, username: string) => {
 export const getLyricFetcher = () => _lyricFetcher
 
 // [新增] 更新索引中指定文件的 hasEmbedLyric 状态（由 embedLyric 接口成功写入后调用）
-export const setIndexEmbedLyric = (filename: string, username: string, value: boolean) => {
+export const setIndexEmbedLyric = (
+    filename: string,
+    username: string,
+    value: boolean,
+    metadata?: Pick<CacheItem, 'audioContainer' | 'metadataWritable' | 'metadataError' | 'embedLyricError'>,
+) => {
     const normalizedUsername = (username && username !== '_open' && username !== 'default') ? username : '_open'
     for (const folder of ['cache', 'music'] as const) {
         const items = indexManager.getAll(normalizedUsername, folder)
         const found = items.find((i: any) => i.filename === filename)
         if (found) {
             (found as any).hasEmbedLyric = value
+            if (metadata) Object.assign(found, metadata)
             indexManager.save(normalizedUsername, folder)
             return true
         }

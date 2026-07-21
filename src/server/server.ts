@@ -23,6 +23,7 @@ import { initUserApis, callUserApiGetMusicUrl, isSourceSupported, getLoadedApis 
 import * as customSourceHandlers from './customSourceHandlers'
 import * as fileCache from './fileCache'
 import * as serverDownloadQueue from './serverDownloadQueue'
+import * as remasterQueue from './remasterQueue'
 import { getDownloadQualityCandidates } from './downloadQuality'
 import crypto from 'node:crypto'
 import needle from 'needle'
@@ -773,6 +774,8 @@ interface ServerSongResolveResult {
   url: string
   quality: string
   songInfo: any
+  requestedSource?: string
+  downloadSource?: string
   sourceName?: string
 }
 
@@ -803,6 +806,8 @@ const resolveServerSong = async (
           url: result.url,
           quality: result.type || quality,
           songInfo: candidate,
+          requestedSource: originalSong.source,
+          downloadSource: fileCache.detectDownloadSource(result.url, source),
           sourceName: result.sourceName,
         }
       } catch (err: any) {
@@ -1846,17 +1851,10 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
 
       // [新增] Token 有效性检查
       if (pathname === '/api/user/auth/verify' && req.method === 'GET') {
-        const token = req.headers['x-user-token'] as string
-        if (!token) {
-          res.writeHead(200, { 'Content-Type': 'application/json' })
-          res.end(JSON.stringify({ valid: false }))
-          return
-        }
-        const session = userSessions.get(token)
-        const valid = !!(session && Date.now() - session.createdAt <= USER_SESSION_TTL)
-        if (!valid && session) userSessions.delete(token) // 清理过期
+        const username = verifyUserAuth(req)
+        const valid = !!username
         res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ valid, username: valid ? session!.username : null }))
+        res.end(JSON.stringify({ valid, username: username || null }))
         return
       }
 
@@ -2050,7 +2048,7 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
             // [核心逻辑] 如果是受限的公开用户，仅允许保存特定的 3 项设置
             if (resolvedUsername === '_open' && global.lx.config['user.enablePublicRestriction']) {
               const restrictedSettings: any = {}
-              const allowedKeys = ['enableServerCache', 'enableServerLyricCache', 'serverCacheLocation', 'serverCacheNamingPattern', 'downloadConcurrency']
+              const allowedKeys = ['enableServerCache', 'enableServerLyricCache', 'serverCacheLocation', 'serverCacheNamingPattern', 'downloadConcurrency', 'enableRemaster']
               allowedKeys.forEach(key => {
                 if (settings[key] !== undefined) restrictedSettings[key] = settings[key]
               })
@@ -2364,6 +2362,48 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
         return
       }
 
+      // Local music remaster APIs use the same account access rules as other cache operations.
+      if (pathname.startsWith('/api/music/remaster/')) {
+        const username = getCacheRequestUsername(req)
+        if (!username) {
+          res.writeHead(401, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ success: false, message: 'Unauthorized' }))
+          return
+        }
+        if (pathname === '/api/music/remaster/start' && req.method === 'POST') {
+          try {
+            const body = JSON.parse(await readBody(req))
+            const data = await remasterQueue.start(username, String(body?.targetQuality || ''), body?.filenames)
+            res.writeHead(200, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: true, data }))
+          } catch (err: any) {
+            res.writeHead(400, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: false, message: err?.message || '启动洗版失败' }))
+          }
+          return
+        }
+
+        if (pathname === '/api/music/remaster/status' && req.method === 'GET') {
+          const offset = Number(urlObj.searchParams.get('offset') || 0)
+          const limit = Number(urlObj.searchParams.get('limit') || 200)
+          const data = remasterQueue.getStatus(username, offset, limit)
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ success: true, data }))
+          return
+        }
+
+        if (pathname === '/api/music/remaster/cancel' && req.method === 'POST') {
+          const cancelled = remasterQueue.cancel(username)
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ success: true, data: { cancelled } }))
+          return
+        }
+
+        res.writeHead(404, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ success: false, message: 'Not Found' }))
+        return
+      }
+
       // [新增] File Cache APIs
       // 1. Config Cache Location
       if (pathname === '/api/music/cache/config' && req.method === 'POST') {
@@ -2402,8 +2442,8 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
             }
 
             if (namingPattern) {
-              fileCache.setNamingPattern(namingPattern)
-              if (global.lx.config) global.lx.config['cache.namingPattern'] = namingPattern
+              const normalizedNamingPattern = fileCache.setNamingPattern(namingPattern)
+              if (global.lx.config) global.lx.config['cache.namingPattern'] = normalizedNamingPattern
               updated = true
             }
 
@@ -2601,8 +2641,8 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
             if (namingPattern) {
               const auth = req.headers['x-frontend-auth']
               if (auth !== global.lx.config['frontend.password']) throw new Error('Unauthorized to change cache naming pattern')
-              fileCache.setNamingPattern(namingPattern)
-              if (global.lx.config) global.lx.config['cache.namingPattern'] = namingPattern
+              const normalizedNamingPattern = fileCache.setNamingPattern(namingPattern)
+              if (global.lx.config) global.lx.config['cache.namingPattern'] = normalizedNamingPattern
             }
             const queued = serverDownloadQueue.enqueue(username, tasks)
             res.writeHead(200, { 'Content-Type': 'application/json' })
@@ -2684,7 +2724,7 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
       if (pathname === '/api/music/cache/download' && req.method === 'POST') {
         void readBody(req).then(body => {
           try {
-            const { songInfo, url, quality, enableOnlyDownloadMode, namingPattern, cacheLyric, embedLyric } = JSON.parse(body)
+            const { songInfo, url, quality, enableOnlyDownloadMode, namingPattern, cacheLyric, embedLyric, requestedSource, downloadSource, sourceName } = JSON.parse(body)
             if (!songInfo || !url) {
               res.writeHead(400)
               res.end('Missing params')
@@ -2712,8 +2752,8 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                 res.end(JSON.stringify({ success: false, error: 'Unauthorized to change cache naming pattern' }))
                 return
               }
-              fileCache.setNamingPattern(namingPattern)
-              if (global.lx.config) global.lx.config['cache.namingPattern'] = namingPattern
+              const normalizedNamingPattern = fileCache.setNamingPattern(namingPattern)
+              if (global.lx.config) global.lx.config['cache.namingPattern'] = normalizedNamingPattern
             }
             const songKey = fileCache.normalizeSongId(songInfo) + '_' + (quality || 'unknown')
 
@@ -2727,7 +2767,11 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
             }
             userTasks.push({ songKey, controller })
 
-            void fileCache.downloadAndCache(songInfo, url, quality, username, controller.signal, !!enableOnlyDownloadMode, cacheLyric !== false, embedLyric !== false)
+            void fileCache.downloadAndCache(songInfo, url, quality, username, controller.signal, !!enableOnlyDownloadMode, cacheLyric !== false, embedLyric !== false, {
+              requestedSource: requestedSource || songInfo.source,
+              downloadSource,
+              sourceName,
+            })
               .then(() => console.log(`[Cache] Downloaded ${songInfo.name} for ${username || '_open'}`))
               .catch((err: any) => {
                 if (err.message === 'Aborted') {
@@ -2927,14 +2971,20 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
         if (!isPublic) {
           const verified = verifyUserAuth(req)
           if (!verified) {
-            res.writeHead(401, { 'Content-Type': 'application/json' })
+            res.writeHead(401, {
+              'Content-Type': 'application/json',
+              'Cache-Control': 'no-cache, no-store, must-revalidate',
+            })
             res.end(JSON.stringify({ success: false, message: 'Unauthorized' }))
             return
           }
           username = verified
         }
         void fileCache.getCacheList(username).then(list => {
-          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.writeHead(200, {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+          })
           res.end(JSON.stringify({ success: true, data: list }))
         }).catch(err => {
           res.writeHead(500)
@@ -2969,7 +3019,7 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
           res.end('Missing filename')
           return
         }
-        const cover = fileCache.getCacheCover(filename, username) as any
+        const cover = await fileCache.getCacheCover(filename, username) as any
         if (cover && cover.data) {
           res.writeHead(200, {
             'Content-Type': cover.mime || 'image/jpeg',
@@ -3171,12 +3221,35 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
               }
 
               try {
+                const indexItem = fileCache.getIndexItemByFilename(filename, username) as any
+                if (indexItem?.metadataWritable === false) {
+                  details.push({ filename, status: 'fail', reason: indexItem.embedLyricError || indexItem.metadataError || '当前音频容器不支持嵌入歌词，外置歌词文件仍可正常使用' })
+                  failCount++
+                  continue
+                }
+
                 // 检查是否已有 USLT 歌词（已有则跳过）
                 const { MusicTagger: MT } = require('music-tag-native')
-                const checkTagger = new MT()
-                checkTagger.loadPath(filePath)
-                const existingLyrics = checkTagger.lyrics
-                checkTagger.dispose()
+                let checkTagger: any
+                let existingLyrics = ''
+                try {
+                  checkTagger = new MT()
+                  checkTagger.loadPath(filePath)
+                  existingLyrics = checkTagger.lyrics || ''
+                } catch (checkError: any) {
+                  const unsupportedStatus = fileCache.getAudioMetadataUnsupportedStatus(filePath)
+                  fileCache.setIndexEmbedLyric(filename, username, false, {
+                    audioContainer: unsupportedStatus.audioContainer,
+                    metadataWritable: false,
+                    metadataError: unsupportedStatus.error,
+                    embedLyricError: unsupportedStatus.error,
+                  })
+                  details.push({ filename, status: 'fail', reason: unsupportedStatus.error || '当前音频容器不支持嵌入歌词，外置歌词文件仍可正常使用' })
+                  failCount++
+                  continue
+                } finally {
+                  try { if (checkTagger) checkTagger.dispose() } catch (e) { }
+                }
 
                 if (existingLyrics && existingLyrics.trim().length > 10) {
                   details.push({ filename, status: 'skipped', reason: '已有歌词标签' })
@@ -3185,7 +3258,6 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                 }
 
                 // 从索引中获取 songInfo（索引条目本身就包含 source/songmid 等字段）
-                const indexItem = fileCache.getIndexItemByFilename(filename, username) as any
                 const songInfo = indexItem
 
                 // 优先读同名 .lrc 文件
@@ -3217,15 +3289,18 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                   continue
                 }
 
-                // 写入 USLT 标签
-                const tagger = new MT()
-                tagger.loadPath(filePath)
-                tagger.lyrics = lyricText
-                tagger.save()
-                tagger.dispose()
-
-                // [新增] 更新索引 hasEmbedLyric 状态
-                fileCache.setIndexEmbedLyric(filename, username, true)
+                const embedResult = fileCache.embedLyricsIntoFile(filePath, lyricText)
+                fileCache.setIndexEmbedLyric(filename, username, embedResult.hasEmbedLyric, {
+                  audioContainer: embedResult.audioContainer,
+                  metadataWritable: embedResult.metadataWritable,
+                  metadataError: embedResult.metadataWritable ? undefined : embedResult.error,
+                  embedLyricError: embedResult.error,
+                })
+                if (!embedResult.success) {
+                  details.push({ filename, status: 'fail', reason: embedResult.error || '歌词标签写入后校验失败，外置歌词文件仍可正常使用' })
+                  failCount++
+                  continue
+                }
 
                 details.push({ filename, status: 'success' })
                 successCount++
@@ -4257,7 +4332,7 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
               throw new Error('Invalid songInfo')
             }
             const source = songInfo.source
-            let result
+            let result: any
 
             let customSourceError: string | null = null
             let attempts: any[] = []
@@ -4349,6 +4424,9 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
               if (result.url.startsWith('http://')) {
                 // console.log(`[MusicUrl] Note: URL is HTTP, frontend might proxy if enabled: ${result.url}`)
               }
+
+              result.requestedSource = songInfo.source
+              result.downloadSource = fileCache.detectDownloadSource(result.url, songInfo.source)
             }
 
             res.writeHead(200, { 'Content-Type': 'application/json' })
@@ -4397,7 +4475,7 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
               bytes,
               size: formatBytes(bytes),
               type: result.quality,
-              source: result.songInfo?.source,
+              source: fileCache.detectDownloadSource(result.url, result.downloadSource || result.songInfo?.source),
               sourceName: result.sourceName,
             }))
           } catch (err: any) {
@@ -5991,7 +6069,7 @@ export const startServer = async (port: number, ip: string) => {
   // Initialize file cache settings from global config
   if (global.lx.config) {
     if (global.lx.config.serverCacheLocation) fileCache.setCacheLocation(global.lx.config.serverCacheLocation)
-    if (global.lx.config['cache.namingPattern']) fileCache.setNamingPattern(global.lx.config['cache.namingPattern'])
+    global.lx.config['cache.namingPattern'] = fileCache.setNamingPattern(global.lx.config['cache.namingPattern'])
 
     // Background sync cache index for active users
     if (global.lx.config.users) {
@@ -6072,8 +6150,8 @@ export const startServer = async (port: number, ip: string) => {
         console.log(`[Server] Restored fileCache location from settings: ${savedSettings.serverCacheLocation}`)
       }
       if (savedSettings.serverCacheNamingPattern) {
-        fileCache.setNamingPattern(savedSettings.serverCacheNamingPattern)
-        console.log(`[Server] Restored cache naming pattern from settings: ${savedSettings.serverCacheNamingPattern}`)
+        const normalizedNamingPattern = fileCache.setNamingPattern(savedSettings.serverCacheNamingPattern)
+        console.log(`[Server] Restored cache naming pattern from settings: ${normalizedNamingPattern}`)
       }
     }
   } catch (err: any) {
@@ -6088,6 +6166,18 @@ export const startServer = async (port: number, ip: string) => {
       url: resolved.url,
       quality: resolved.quality,
       songInfo: resolved.songInfo,
+      requestedSource: resolved.requestedSource,
+      downloadSource: resolved.downloadSource,
+      sourceName: resolved.sourceName,
+    }
+  })
+
+  remasterQueue.initialize(async (songInfo, requestedQuality, username) => {
+    const apiUsername = username === '_open' ? 'open' : username
+    const resolved = await resolveServerSong(songInfo, requestedQuality, apiUsername, true)
+    return {
+      url: resolved.url,
+      quality: resolved.quality,
     }
   })
 
