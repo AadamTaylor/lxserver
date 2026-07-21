@@ -124,10 +124,42 @@ module.exports = {
   // 环境变量: SUBSONIC_PATH
   "subsonic.path": "/rest",
 
+  // 是否开启 Subsonic 调试日志模式 (true/false)
+  // 环境变量: SUBSONIC_ENABLE_DEBUG
+  "subsonic.enableDebug": true,
+
+  // 是否开启 Subsonic 在线全网搜索 (true/false)
+  // 环境变量: SUBSONIC_ONLINE_SEARCH
+  "subsonic.onlineSearch": true,
+
+  // Subsonic 在线搜索模式 (fallback: 自动兜底 | merge: 混合融合 | local_only: 仅本地)
+  // 环境变量: SUBSONIC_ONLINE_SEARCH_MODE
+  "subsonic.onlineSearchMode": "fallback",
+
+  // Subsonic 在线搜索默认平台 (多个平台用逗号分隔，如 wy,tx,kw,kg,mg)
+  // 环境变量: SUBSONIC_ONLINE_SEARCH_SOURCES
+  "subsonic.onlineSearchSources": "wy,tx,kw,kg,mg",
+
+  // 是否在 Subsonic 歌词中包含多行翻译 (true/false)
+  // 环境变量: SUBSONIC_LYRIC_TRANSLATION
+  "subsonic.lyricTranslation": true,
+
   // 歌手信息源优先级 (多个源用逗号分隔，如 tx,wy)
   // 环境变量: SINGER_SOURCE_PRIORITY
   "singer.sourcePriority": [
     "tx",
     "wy"
-  ]
+  ],
+
+  // 歌手歌曲最大抓取页数 (用于生成歌手热门歌曲)
+  // 环境变量: ARTIST_MAX_FETCH_PAGES
+  "artist.maxFetchPages": 20,
+
+  // 服务器本地缓存文件命名规则 (standard: 标准规则 | clean: 简洁规则)
+  // 环境变量: CACHE_NAMING_PATTERN
+  "cache.namingPattern": "standard",
+
+  // 是否允许运行原生 VM 模式自定义源脚本 (出于安全考虑，默认关闭)
+  // 环境变量: SYSTEM_ALLOW_UNSAFE_VM
+  "system.allowUnsafeVM": false
 }

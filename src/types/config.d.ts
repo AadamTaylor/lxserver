@@ -171,6 +171,31 @@ declare namespace LX {
     'subsonic.path'?: string
 
     /**
+     * 是否开启 Subsonic 调试日志模式 (默认 false/true)
+     */
+    'subsonic.enableDebug'?: boolean
+
+    /**
+     * 是否启用 Subsonic 在线全网搜索
+     */
+    'subsonic.onlineSearch'?: boolean
+
+    /**
+     * Subsonic 在线搜索模式 (fallback | merge | local_only)
+     */
+    'subsonic.onlineSearchMode'?: 'fallback' | 'merge' | 'local_only'
+
+    /**
+     * Subsonic 在线搜索默认平台 (如 wy,tx,kw,kg,mg)
+     */
+    'subsonic.onlineSearchSources'?: string
+
+    /**
+     * Subsonic 歌词是否包含翻译 (默认 true)
+     */
+    'subsonic.lyricTranslation'?: boolean
+
+    /**
      * 歌手信息源优先级
      */
     'singer.sourcePriority': Array<'tx' | 'wy'>

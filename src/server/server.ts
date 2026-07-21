@@ -4931,6 +4931,11 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
             'player.path': global.lx.config['player.path'] ?? '/music',
             'subsonic.enable': global.lx.config['subsonic.enable'] ?? true,
             'subsonic.path': global.lx.config['subsonic.path'] ?? '/rest',
+            'subsonic.enableDebug': global.lx.config['subsonic.enableDebug'] ?? true,
+            'subsonic.onlineSearch': global.lx.config['subsonic.onlineSearch'] ?? true,
+            'subsonic.onlineSearchMode': global.lx.config['subsonic.onlineSearchMode'] ?? 'fallback',
+            'subsonic.onlineSearchSources': global.lx.config['subsonic.onlineSearchSources'] ?? 'wy,tx,kw,kg,mg',
+            'subsonic.lyricTranslation': global.lx.config['subsonic.lyricTranslation'] ?? true,
             'singer.sourcePriority': (global.lx.config['singer.sourcePriority'] || ['tx', 'wy']).join(','),
             'artist.maxFetchPages': global.lx.config['artist.maxFetchPages'] ?? 20,
             'system.allowUnsafeVM': global.lx.config['system.allowUnsafeVM'] || false,
@@ -5027,6 +5032,11 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
               if (newConfig['subsonic.path'] !== undefined) {
                 global.lx.config['subsonic.path'] = newConfig['subsonic.path'].replace(/\/+$/, '') || '/rest'
               }
+              if (newConfig['subsonic.enableDebug'] !== undefined) global.lx.config['subsonic.enableDebug'] = newConfig['subsonic.enableDebug']
+              if (newConfig['subsonic.onlineSearch'] !== undefined) global.lx.config['subsonic.onlineSearch'] = newConfig['subsonic.onlineSearch']
+              if (newConfig['subsonic.onlineSearchMode'] !== undefined) global.lx.config['subsonic.onlineSearchMode'] = newConfig['subsonic.onlineSearchMode']
+              if (newConfig['subsonic.onlineSearchSources'] !== undefined) global.lx.config['subsonic.onlineSearchSources'] = newConfig['subsonic.onlineSearchSources']
+              if (newConfig['subsonic.lyricTranslation'] !== undefined) global.lx.config['subsonic.lyricTranslation'] = newConfig['subsonic.lyricTranslation']
               if (newConfig['singer.sourcePriority'] !== undefined) {
                 const priority = String(newConfig['singer.sourcePriority']).split(',').filter(s => s === 'tx' || s === 'wy') as Array<'tx' | 'wy'>
                 if (priority.length > 0) global.lx.config['singer.sourcePriority'] = priority
@@ -5071,6 +5081,11 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                 'player.path': global.lx.config['player.path'] ?? '/music',
                 'subsonic.enable': global.lx.config['subsonic.enable'],
                 'subsonic.path': global.lx.config['subsonic.path'],
+                'subsonic.enableDebug': global.lx.config['subsonic.enableDebug'],
+                'subsonic.onlineSearch': global.lx.config['subsonic.onlineSearch'],
+                'subsonic.onlineSearchMode': global.lx.config['subsonic.onlineSearchMode'],
+                'subsonic.onlineSearchSources': global.lx.config['subsonic.onlineSearchSources'],
+                'subsonic.lyricTranslation': global.lx.config['subsonic.lyricTranslation'],
                 'artist.maxFetchPages': global.lx.config['artist.maxFetchPages'],
                 'system.allowUnsafeVM': global.lx.config['system.allowUnsafeVM'],
                 users: global.lx.config.users.map(u => ({

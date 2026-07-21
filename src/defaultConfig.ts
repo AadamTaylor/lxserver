@@ -47,6 +47,11 @@ const config: LX.Config = {
   'player.path': '/music', // 播放器路径
   'subsonic.enable': true, // 是否启用 Subsonic 服务
   'subsonic.path': '/rest', // Subsonic 访问路径
+  'subsonic.enableDebug': true, // 是否开启 Subsonic 调试日志模式
+  'subsonic.onlineSearch': true, // 是否开启 Subsonic 在线全网搜索
+  'subsonic.onlineSearchMode': 'fallback', // 在线搜索模式: fallback | merge | local_only
+  'subsonic.onlineSearchSources': 'wy,tx,kw,kg,mg', // 在线搜索默认平台
+  'subsonic.lyricTranslation': true, // 是否在 Subsonic 歌词中包含翻译
   'singer.sourcePriority': ['tx', 'wy'], // 歌手信息源优先级
   'artist.maxFetchPages': 20, // 歌手歌曲最大抓取页数
   'cache.namingPattern': 'standard', // 缓存命名规则

@@ -1754,6 +1754,21 @@ class App {
             if (form.elements['subsonic.path']) {
                 form.elements['subsonic.path'].value = config['subsonic.path'] || '/rest';
             }
+            if (form.elements['subsonic.enableDebug']) {
+                form.elements['subsonic.enableDebug'].checked = config['subsonic.enableDebug'] === true;
+            }
+            if (form.elements['subsonic.onlineSearch']) {
+                form.elements['subsonic.onlineSearch'].checked = config['subsonic.onlineSearch'] !== false;
+            }
+            if (form.elements['subsonic.onlineSearchMode']) {
+                form.elements['subsonic.onlineSearchMode'].value = config['subsonic.onlineSearchMode'] || 'fallback';
+            }
+            if (form.elements['subsonic.onlineSearchSources']) {
+                form.elements['subsonic.onlineSearchSources'].value = config['subsonic.onlineSearchSources'] || 'wy,tx,kw,kg,mg';
+            }
+            if (form.elements['subsonic.lyricTranslation']) {
+                form.elements['subsonic.lyricTranslation'].checked = config['subsonic.lyricTranslation'] !== false;
+            }
         } catch (err) {
             console.error('Failed to load config:', err);
         }
@@ -1813,6 +1828,11 @@ class App {
             'player.path': playerPath,
             'subsonic.enable': formData.get('subsonic.enable') === 'on',
             'subsonic.path': (formData.get('subsonic.path') || '').trim() || '/rest',
+            'subsonic.enableDebug': formData.get('subsonic.enableDebug') === 'on',
+            'subsonic.onlineSearch': formData.get('subsonic.onlineSearch') === 'on',
+            'subsonic.onlineSearchMode': formData.get('subsonic.onlineSearchMode') || 'fallback',
+            'subsonic.onlineSearchSources': (formData.get('subsonic.onlineSearchSources') || '').trim() || 'wy,tx,kw,kg,mg',
+            'subsonic.lyricTranslation': formData.get('subsonic.lyricTranslation') === 'on',
             'singer.sourcePriority': formData.get('singer.sourcePriority'),
             'system.allowUnsafeVM': formData.get('system.allowUnsafeVM') === 'on',
         };

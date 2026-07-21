@@ -901,11 +901,61 @@
                                         <span class="toggle-track"><span class="toggle-thumb"></span></span>
                                     </label>
                                 </div>
+                                <div class="config-toggle-row" style="margin-top: 12px;">
+                                    <div class="config-toggle-info">
+                                        <span class="config-toggle-label">Subsonic 调试日志模式</span>
+                                        <span class="config-toggle-desc">开启后将在服务器控制台中实时打印所有客户端发起的 Subsonic 请求与缺失接口提示</span>
+                                    </div>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" name="subsonic.enableDebug" />
+                                        <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                                    </label>
+                                </div>
                                 <div class="config-field">
                                     <label class="config-label">Subsonic 访问路径</label>
                                     <input type="text" name="subsonic.path" class="form-input config-input"
                                         placeholder="/rest" />
                                     <small class="config-hint">Subsonic API 默认路径为 /rest。修改后需在客户端同步更新 URL</small>
+                                </div>
+                                <div class="config-divider"></div>
+                                <div class="config-toggle-row">
+                                    <div class="config-toggle-info">
+                                        <span class="config-toggle-label">开启全网在线搜索</span>
+                                        <span class="config-toggle-desc">允许 Subsonic 客户端在搜索歌曲时检索全网音乐 API</span>
+                                    </div>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" name="subsonic.onlineSearch" />
+                                        <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                                    </label>
+                                </div>
+                                <div class="config-field">
+                                    <label class="config-label">默认在线搜索模式</label>
+                                    <select name="subsonic.onlineSearchMode" class="form-input config-input">
+                                        <option value="fallback">自动兜底（本地未命中或数量不足时搜在线）</option>
+                                        <option value="merge">本地与在线融合搜索（本地置顶，在线追加）</option>
+                                        <option value="local_only">仅搜索本地歌单</option>
+                                    </select>
+                                </div>
+                                <div class="config-field">
+                                    <label class="config-label">默认在线搜索平台</label>
+                                    <input type="text" name="subsonic.onlineSearchSources" class="form-input config-input"
+                                        placeholder="wy,tx,kw,kg,mg" />
+                                    <small class="config-hint">可选 wy,tx,kw,kg,mg，用英文逗号分隔</small>
+                                </div>
+                                <div class="config-toggle-row">
+                                    <div class="config-toggle-info">
+                                        <span class="config-toggle-label">开启歌词翻译支持</span>
+                                        <span class="config-toggle-desc">允许在 Subsonic 歌词响应中包含翻译文本（原文在上，翻译在下）</span>
+                                    </div>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" name="subsonic.lyricTranslation" />
+                                        <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                                    </label>
+                                </div>
+                                <div class="config-divider"></div>
+                                <div class="config-hint" style="background: rgba(244, 63, 94, 0.06); padding: 8px 12px; border-radius: 6px; color: var(--text-secondary); line-height: 1.5;">
+                                    💡 <strong>客户端搜索与歌词提示：</strong>同时间戳歌词顺序为<strong>原文在上，翻译在下</strong>。<br/>
+                                    • <code>wy:歌名</code> / <code>tx:歌名</code> ➔ 客户端搜索框输入前缀可强制在线搜索平台
                                 </div>
                                 <div class="config-divider"></div>
                                 <div class="config-field">
