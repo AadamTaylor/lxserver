@@ -453,7 +453,9 @@ async function handleLogout() {
     } catch (e) {
         console.error('[Auth] 登出请求失败:', e);
     }
-    window.location.replace('/music/login');
+    const playerPath = (window.CONFIG && window.CONFIG['player.path']) || (window.lx_config && window.lx_config['player.path']) || '/music';
+    const normalizedPlayerPath = (playerPath === '/' || playerPath === '') ? '' : playerPath.replace(/\/+$/, '');
+    window.location.replace(`${normalizedPlayerPath}/login`);
 }
 // ===== 认证代码结束 =====
 

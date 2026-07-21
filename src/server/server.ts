@@ -940,21 +940,22 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
 
     if (isPlayerRequest || isLegacyPlayerAsset) {
       const activePrefix = isPlayerRequest ? playerPath : '/music'
+      const normalizedPrefix = (activePrefix === '/' || activePrefix === '') ? '' : activePrefix.replace(/\/+$/, '')
       // 白名单：登录页、静态资源无需认证
-      const isLoginPage = pathname === `${activePrefix}/login` || pathname === `${activePrefix}/login.html`
-      const isPublicAsset = pathname.startsWith(`${activePrefix}/assets/`) ||
-        pathname.startsWith(`${activePrefix}/css/`) ||
-        pathname.startsWith(`${activePrefix}/js/`) ||
-        pathname.startsWith(`${activePrefix}/fonts/`) ||
-        pathname.startsWith(`${activePrefix}/img/`) ||
-        pathname === `${activePrefix}/manifest.json` ||
-        pathname === `${activePrefix}/sw.js` ||
+      const isLoginPage = pathname === `${normalizedPrefix}/login` || pathname === `${normalizedPrefix}/login.html`
+      const isPublicAsset = pathname.startsWith(`${normalizedPrefix}/assets/`) ||
+        pathname.startsWith(`${normalizedPrefix}/css/`) ||
+        pathname.startsWith(`${normalizedPrefix}/js/`) ||
+        pathname.startsWith(`${normalizedPrefix}/fonts/`) ||
+        pathname.startsWith(`${normalizedPrefix}/img/`) ||
+        pathname === `${normalizedPrefix}/manifest.json` ||
+        pathname === `${normalizedPrefix}/sw.js` ||
         isLegacyPlayerAsset
 
       // 认证检查
       if (!isLoginPage && !isPublicAsset && global.lx.config['player.enableAuth']) {
         if (!checkPlayerAuth(req)) {
-          res.writeHead(302, { 'Location': `${playerPath}/login` })
+          res.writeHead(302, { 'Location': `${normalizedPrefix}/login` })
           res.end()
           return
         }
@@ -969,7 +970,7 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
         return
       }
 
-      const subPath = pathname.slice(activePrefix.length)
+      const subPath = pathname.slice(normalizedPrefix.length)
       if (subPath === '/' || subPath === '') {
         targetPath = 'music/index.html'
       } else if (isLoginPage) {

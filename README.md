@@ -8,7 +8,7 @@
   <h1>LX Sync Server</h1> -->
   <p>
     <img src="https://img.shields.io/badge/build-passing-brightgreen?style=flat-square" alt="Build Status">
-    <img src="https://img.shields.io/badge/version-v1.9.4-blue?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/version-v1.9.5-blue?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/node-%3E%3D16-green?style=flat-square" alt="Node Version">
     <img src="https://img.shields.io/github/license/XCQ0607/lxserver?style=flat-square" alt="License">
     <br>
@@ -300,6 +300,14 @@ npm start
 - 修改自 [lyswhut/lx-music-sync-server](https://github.com/lyswhut/lx-music-sync-server)。
 - Web 播放器逻辑参考 [lx-music-desktop](https://github.com/lyswhut/lx-music-desktop)。
 - 接口实现基于 `musicsdk`。
+
+### 👥 贡献者 (Contributors)
+
+<a href="https://github.com/xcq0607/lxserver/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=xcq0607/lxserver" />
+</a>
+
+Made with [contrib.rocks](https://contrib.rocks).
 
 ## 📈 Star History
 

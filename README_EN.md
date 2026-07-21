@@ -5,7 +5,7 @@
 <div align="center">
   <p>
     <img src="https://img.shields.io/badge/build-passing-brightgreen?style=flat-square" alt="Build Status">
-    <img src="https://img.shields.io/badge/version-v1.9.4-blue?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/version-v1.9.5-blue?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/node-%3E%3D16-green?style=flat-square" alt="Node Version">
     <img src="https://img.shields.io/github/license/XCQ0607/lxserver?style=flat-square" alt="License">
     <br>
@@ -290,6 +290,14 @@ Anonymous telemetry via PostHog is used for:
 - Forked from [lyswhut/lx-music-sync-server](https://github.com/lyswhut/lx-music-sync-server).
 - Web player logic inspired by [lx-music-desktop](https://github.com/lyswhut/lx-music-desktop).
 - API based on `musicsdk`.
+
+### 👥 Contributors
+
+<a href="https://github.com/xcq0607/lxserver/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=xcq0607/lxserver" />
+</a>
+
+Made with [contrib.rocks](https://contrib.rocks).
 
 ---
 
