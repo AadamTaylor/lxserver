@@ -1,6 +1,6 @@
 import fs from 'fs'
 import path from 'path'
-import archiver from 'archiver'
+import { ZipArchive } from 'archiver'
 import { Extract } from 'unzipper'
 import crypto from 'crypto'
 import { EventEmitter } from 'events'
@@ -296,7 +296,7 @@ class WebDAVSync extends EventEmitter {
 
             await new Promise<void>((resolve, reject) => {
                 const output = fs.createWriteStream(zipPath)
-                const archive = archiver('zip', { zlib: { level: 9 } })
+                const archive = new ZipArchive({ zlib: { level: 9 } })
 
                 let fileCount = 0
 
@@ -312,7 +312,7 @@ class WebDAVSync extends EventEmitter {
                 })
 
                 output.on('close', () => resolve())
-                archive.on('error', (err) => reject(err))
+                archive.on('error', (err: Error) => reject(err))
 
                 archive.pipe(output)
                 archive.glob('**/*', {
