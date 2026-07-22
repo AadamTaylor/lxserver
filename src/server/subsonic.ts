@@ -2034,11 +2034,11 @@ class SubsonicHandler {
                 source,
                 songmid,
                 id,
-                hash,
+                ...(hash ? { hash } : {}),
                 meta: {
                     ...(musicInfo.meta || {}),
                     songId: songmid,
-                    hash,
+                    ...(hash ? { hash } : {}),
                 }
             }
 
