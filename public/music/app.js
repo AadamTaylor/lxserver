@@ -66,7 +66,7 @@ document.addEventListener('DOMContentLoaded', () => {
 const DEFAULT_SETTINGS = {
     itemsPerPage: 20, // Default 20 items per page, can be 'all'
     defaultEntry: 'favorites', // 默认入口: 'search' | 'songlist' | 'leaderboard' | 'favorites' | 'localmusic'
-    preferredQuality: '320k', // 默认音质偏好
+    preferredQuality: 'flac', // 默认音质偏好
     enablePublicSources: true, // 是否显示公开源
     enableProxyPlayback: false, // 播放音乐代理
     enableProxyDownload: false, // 下载音乐代理
@@ -3125,7 +3125,7 @@ async function resolveSongUrl(song, quality, isSilent = false, isRetry = false, 
                     if (!isSilent) {
                         showInfo(`找到备选源，尝试从 ${getSourceName(matchedSong.source)} 播放...`);
                     }
-                    const bestNextQuality = window.QualityManager.getBestQuality(matchedSong, settings.preferredQuality || '320k');
+                    const bestNextQuality = window.QualityManager.getBestQuality(matchedSong, settings.preferredQuality || 'flac');
                     const matchedResult = await fetchSongUrl(matchedSong, bestNextQuality, fallbackRetryMode, isSilent);
                     return {
                         ...matchedResult,
@@ -3146,7 +3146,7 @@ async function resolveDownloadSongUrl(song, quality, isSilent = true) {
     let lastError = null;
 
     const tryResolveCandidate = async (candidateSong, preferredQuality) => {
-        const requestedQuality = preferredQuality || settings.preferredQuality || '320k';
+        const requestedQuality = preferredQuality || settings.preferredQuality || 'flac';
         let candidateQuality = window.QualityManager?.QUALITY_PRIORITY?.includes(requestedQuality)
             ? requestedQuality
             : (window.QualityManager
@@ -3599,7 +3599,7 @@ async function prefetchNextSong(startFromIndex = null, depth = 0) {
     }
 
     try {
-        const targetQual = window.QualityManager.getBestQuality(nextSong, settings.preferredQuality || '320k');
+        const targetQual = window.QualityManager.getBestQuality(nextSong, settings.preferredQuality || 'flac');
 
         // 1. 检查内存缓存
         let result = prefetchManager.get(nextSong.id);
@@ -4005,7 +4005,7 @@ async function runRecoveryFlow(error) {
             if (matchedSong) {
                 currentRecoveryState.currentSong = matchedSong;
                 currentRecoveryState.triedPlatforms.push(matchedSong.source);
-                const bestNextQuality = window.QualityManager.getBestQuality(matchedSong, settings.preferredQuality || '320k');
+                const bestNextQuality = window.QualityManager.getBestQuality(matchedSong, settings.preferredQuality || 'flac');
                 currentRecoveryState.currentQuality = bestNextQuality;
                 currentRecoveryState.triedQualities = [bestNextQuality];
                 
@@ -4066,7 +4066,7 @@ async function playSong(song, index, forceQuality = null, noPlay = false, isRetr
             }
         }
 
-        const startQuality = forceQuality || window.QualityManager.getBestQuality(song, settings.preferredQuality || '320k');
+        const startQuality = forceQuality || window.QualityManager.getBestQuality(song, settings.preferredQuality || 'flac');
 
         currentRecoveryState = {
             originalSong: song,
@@ -4173,7 +4173,7 @@ async function playSong(song, index, forceQuality = null, noPlay = false, isRetr
         // 1. 智能音质选择与 URL 解析
         if (!urlResult) {
             if (!targetQuality) {
-                targetQuality = window.QualityManager.getBestQuality(song, settings.preferredQuality || '320k');
+                targetQuality = window.QualityManager.getBestQuality(song, settings.preferredQuality || 'flac');
             }
             setPlayerStatus('正在获取播放链接', null, true);
             urlResult = await resolveSongUrl(song, targetQuality, false, isRetry, !noPlay);
@@ -6021,7 +6021,7 @@ async function resetAllSettings() {
 
         // If sync enabled, push to server
         if (settings.saveAccountSettingsToFile) {
-            pushSettingsToServer();
+            await pushSettingsToServer();
         }
 
         showSuccess('设置已重置，正在重新加载页面...');
@@ -11278,7 +11278,7 @@ async function handleDownloadClick(event) {
     const song = currentPlayingSong;
     
     // [优化] 检测是否已缓存
-    const prefQuality = window.settings?.preferredQuality || '320k';
+    const prefQuality = window.settings?.preferredQuality || 'flac';
     const checkResult = await window.checkServerCache?.(song, prefQuality);
     const cacheSuffix = (checkResult?.exists && !checkResult?.isCollision) ? ' (已缓存)' : '';
 
