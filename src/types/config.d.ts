@@ -73,6 +73,11 @@ declare namespace LX {
     'user.enablePublicRestriction'?: boolean
 
     /**
+     * 是否开启公开收藏和歌曲
+     */
+    'user.enablePublicFavorites'?: boolean
+
+    /**
      * 是否启用登录用户缓存限制
      */
     'user.enableLoginCacheRestriction'?: boolean

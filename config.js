@@ -4,7 +4,7 @@
  */
 module.exports = {
   // 同步服务名称
-  // 环境变量: 无
+  // 环境变量: SERVER_NAME
   "serverName": "lxserver",
 
   // 是否使用代理转发请求到本服务器 (如果配置了 proxy.header，此项会自动设为 true)
@@ -36,6 +36,10 @@ module.exports = {
   // 是否启用公开用户权限限制 (开启后将限制公开用户的某些敏感操作，如上传、删除自定义源)
   // 环境变量: ENABLE_PUBLIC_USER_RESTRICTION (true/false)
   "user.enablePublicRestriction": true,
+
+  // 是否开启公开收藏和歌曲 (开启后允许公开/未登录用户查看及播放公开收藏列表)
+  // 环境变量: ENABLE_PUBLIC_FAVORITES (true/false)
+  "user.enablePublicFavorites": false,
 
   // 是否启用登录用户缓存限制 (开启后将限制非管理员登录用户的核心缓存设置)
   // 环境变量: ENABLE_LOGIN_USER_CACHE_RESTRICTION (true/false)

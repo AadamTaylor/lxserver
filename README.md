@@ -109,12 +109,21 @@
   <img src="md/singer.png" width="400" alt="歌手展示">
 </p>
 
-### 10. Subsonic 协议支持
+### 10. Subsonic 协议与全网检索支持
 
-全面适配 Subsonic 协议，支持使用各类 Subsonic 客户端（如音流、Feishin 等）连接并播放本站资源。
+全面适配 Subsonic 协议，支持使用各类 Subsonic 客户端（如音流、Feishin 等）连接并播放本站资源。支持在 Subsonic 客户端中通过 `wy:`, `kg:`, `tx:`, `kw:`, `mg:` 等指定平台前缀，或 `online:` / `local:` 强制指定全网在线或本地搜索。
 
 <p align="center">
-  <img src="md/subsonic.png" width="800" alt="Subsonic 支持">
+  <img src="md/subsonic.png" width="400" alt="Subsonic 支持">
+  <img src="md/subsonic-search.png" width="400" alt="Subsonic 在线全网搜索">
+</p>
+
+### 11. 公共曲库与共享收藏
+
+在后台系统配置中开启 **“开启公共收藏和歌曲”** 之后，所有用户（无论未登录或不同账号）均可共同拥有并共享一个公共曲库与公开歌单列表。
+
+<p align="center">
+  <img src="md/_open_song.png" width="800" alt="公共曲库与共享收藏">
 </p>
 
 ## 🔒 访问控制与安全
@@ -254,7 +263,7 @@ npm start
 | `SUBSONIC_ENABLE`                     | `subsonic.enable`                  | 是否启用 Subsonic 协议支持 (服务默认开启)                          | `true`           |
 | `SUBSONIC_PATH`                       | `subsonic.path`                    | Subsonic 访问路径 (默认为 `/rest`)                               | `/rest`          |
 | `FRONTEND_PASSWORD`                   | `frontend.password`                | Web 管理界面访问密码                                               | `123456`         |
-| `SERVER_NAME`                         | `serverName`                       | 同步服务名称                                                       | `My Sync Server` |
+| `SERVER_NAME`                         | `serverName`                       | 同步服务名称                                                       | `lxserver`       |
 | `MAX_SNAPSHOT_NUM`                    | `maxSnapshotNum`                   | 保留的最大快照数量                                                 | `10`             |
 | `CONFIG_PATH`                         | -                                    | 指定外部配置文件的绝对路径                                         | -                  |
 | `DATA_PATH`                           | -                                    | 指定数据存储目录的绝对路径                                         | `./data`         |
@@ -274,6 +283,7 @@ npm start
 | `WEBPLAYER_PASSWORD`                  | `player.password`                  | Web 播放器访问密码                                                 | `123456`         |
 | `DISABLE_TELEMETRY`                   | `disableTelemetry`                 | 是否禁用匿名数据统计，系统更新提示以及系统公告提示                 | `false`          |
 | `ENABLE_PUBLIC_USER_RESTRICTION`      | `user.enablePublicRestriction`     | 是否启用公开用户权限限制 (限制上传、删除公开源、缓存到服务器等)    | `true`           |
+| `ENABLE_PUBLIC_FAVORITES`             | `user.enablePublicFavorites`       | 是否开启公开收藏和歌曲 (开启后允许公开/未登录用户查看及播放公开收藏) | `false`          |
 | `ENABLE_LOGIN_USER_CACHE_RESTRICTION` | `user.enableLoginCacheRestriction` | 是否启用登录用户缓存限制 (开启后限非管理员登录用户的缓存设置)      | `false`          |
 | `ENABLE_CACHE_SIZE_LIMIT`             | `user.enableCacheSizeLimit`        | 是否启用缓存空间限制 (开启后超出容量将按 LRU 自动清理)             | `false`          |
 | `CACHE_SIZE_LIMIT`                    | `user.cacheSizeLimit`              | 缓存空间限制大小 (单位: MB)                                        | `2000`           |
@@ -282,6 +292,21 @@ npm start
 | `PROXY_ALL_ADDRESS`                   | `proxy.all.address`                | 代理地址 (支持 http:// 或 socks5://)                               | -                  |
 | `SINGER_SOURCE_PRIORITY`              | `singer.sourcePriority`            | 歌手信息获取来源优先级 (如 `tx,wy` 或 `wy,tx`)                 | `tx,wy`          |
 | `LX_USER_<用户名>`                    | `users` 数组                       | 快速添加用户，值为该用户的密码 (如 `LX_USER_test=123`)           | -                  |
+
+### 仅在 `config.js` 中生效的高级配置项
+
+部分高级选项仅可通过直接修改 `config.js` 进行配置：
+
+| 配置项 | 说明 | 默认值 |
+| --- | --- | --- |
+| `subsonic.enableDebug` | 是否开启 Subsonic 调试日志模式 | `true` |
+| `subsonic.onlineSearch` | 是否开启 Subsonic 在线全网搜索 | `true` |
+| `subsonic.onlineSearchMode` | Subsonic 在线搜索模式 (`fallback` 回退模式 / `merge` 合并模式 / `local_only` 仅本地) | `"fallback"` |
+| `subsonic.onlineSearchSources` | Subsonic 在线搜索默认音源列表 | `"wy,tx,kw,kg,mg"` |
+| `subsonic.lyricTranslation` | Subsonic 歌词中是否包含翻译 | `true` |
+| `artist.maxFetchPages` | 歌手歌曲最大抓取页数 | `20` |
+| `cache.namingPattern` | 缓存文件命名规则 (`simple` / `custom`) | `"simple"` |
+| `system.allowUnsafeVM` | 是否允许运行 VM 模式自定义源脚本 (需注意安全风险) | `false` |
 
 > **提示**：目前服务支持 `启用根路径` (URL配置为 `ip:port`) 和 `启用用户路径` (URL配置为 `ip:port/username`) 两种数据同步连接方式。如果没有启用用户路径，则必须保证每一个同步用户的鉴权密码不重复。
 

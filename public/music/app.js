@@ -312,17 +312,181 @@ let userToken = localStorage.getItem('lx_user_token');
 /**
  * 生成用户 API 请求所需的认证 Headers。
  * 优先使用 Token，若无 Token 则兼容旧的 x-user-password 方式。
+ * 注意：此函数总是返回"真实用户"的凭证，不受 isViewingPublicFavorites 影响。
+ * 若需要 _open 头，请在调用处手动覆盖 x-user-name。
  */
 function getUserAuthHeaders() {
-    const username = currentListData?.username || localStorage.getItem('lx_sync_user') || '';
+    // 始终优先使用已登录的真实用户
+    let username = localStorage.getItem('lx_sync_user') || '';
+    // 过滤掉 _open 假用户
+    if (username === '_open') username = '';
+
+    const adminPass = localStorage.getItem('lx_admin_password');
+
+    const headers = {};
     if (userToken) {
-        return { 'x-user-name': username, 'x-user-token': userToken };
+        headers['x-user-name'] = username;
+        headers['x-user-token'] = userToken;
+    } else {
+        const pass = localStorage.getItem('lx_sync_pass');
+        if (username && pass) {
+            headers['x-user-name'] = username;
+            headers['x-user-password'] = pass;
+        } else if (username) {
+            headers['x-user-name'] = username;
+        }
     }
-    // 兼容旧方式（自动登录流程会尝试获取 Token，此为局部调用后备）
-    const pass = localStorage.getItem('lx_sync_pass');
-    return username && pass ? { 'x-user-name': username, 'x-user-password': pass } : {};
+    if (adminPass) {
+        headers['x-frontend-auth'] = adminPass;
+    }
+    return headers;
 }
 window.getUserAuthHeaders = getUserAuthHeaders;
+
+function isUserLoggedIn() {
+    const user = localStorage.getItem('lx_sync_user');
+    const token = localStorage.getItem('lx_user_token');
+    const pass = localStorage.getItem('lx_sync_pass');
+    return !!user && user !== '_open' && !!(token || pass);
+}
+window.isUserLoggedIn = isUserLoggedIn;
+
+/**
+ * 判断当前 library（收藏歌手/专辑）操作是否应该指向 _open 公开用户
+ * 如果已经登录了普通账号，任何 Library 操作（歌手/专辑）始终属于个人账户，不属于 _open
+ * 只有在未登录普通账号时，指向 _open 公开空间
+ */
+function isPublicLibraryContext() {
+    if (isUserLoggedIn()) return false;
+    return true;
+}
+window.isPublicLibraryContext = isPublicLibraryContext;
+
+
+
+async function fetchPublicListData() {
+    const enablePublicFavorites = !!window.lx_config?.['user.enablePublicFavorites'];
+    if (!enablePublicFavorites) return false;
+
+    try {
+        console.log('[PublicList] 正在获取 _open 公共歌单数据...');
+        const headers = {};
+        const adminPass = localStorage.getItem('lx_admin_password');
+        if (adminPass) headers['x-frontend-auth'] = adminPass;
+        headers['x-user-name'] = '_open';
+        const res = await fetch('/api/user/list?user=_open', {
+            headers,
+            cache: 'no-store'
+        });
+        if (res.ok) {
+            const listData = await res.json();
+            if (listData) {
+                listData.username = '_open';
+                // 将公共列表保存为 window.publicListData，切换展示用
+                window.publicListData = listData;
+                currentListData = listData;
+                window.currentListData = listData;
+                renderMyLists(listData);
+                console.log('[PublicList] 公共歌单数据加载成功');
+                if (typeof loadLibraryData === 'function') {
+                    await loadLibraryData();
+                }
+                return true;
+            }
+        }
+    } catch (err) {
+        console.warn('[PublicList] 加载公共歌单失败:', err);
+    }
+    return false;
+}
+window.fetchPublicListData = fetchPublicListData;
+
+async function reloadUserFavorites() {
+    try {
+        if (!isUserLoggedIn()) {
+            // 未登录个人账号时，加载 _open 公开歌单
+            const loaded = await fetchPublicListData();
+            if (loaded) return;
+            currentListData = null;
+            window.currentListData = null;
+            renderMyLists(null);
+            return;
+        }
+
+        // 1. 先恢复已缓存的个人数据（避免切换时白屏）
+        if (window.myPersonalListData) {
+            currentListData = window.myPersonalListData;
+            window.currentListData = window.myPersonalListData;
+            renderMyLists(window.myPersonalListData);
+        } else {
+            currentListData = null;
+            window.currentListData = null;
+        }
+
+        // 2. 再从服务器拉最新数据
+        const headers = typeof getUserAuthHeaders === 'function' ? getUserAuthHeaders() : {};
+        delete headers['x-user-name'];
+        const syncUser = localStorage.getItem('lx_sync_user');
+        if (syncUser && syncUser !== '_open') {
+            headers['x-user-name'] = syncUser;
+        }
+        const res = await fetch('/api/user/list', {
+            headers,
+            cache: 'no-store'
+        });
+        if (res.ok) {
+            const listData = await res.json();
+            if (listData) {
+                currentListData = listData;
+                window.currentListData = listData;
+                window.myPersonalListData = listData;
+                renderMyLists(listData);
+                await window.ListStore.set(listData).catch(e => console.error('[IDBStore] 保存失败:', e));
+                if (typeof loadLibraryData === 'function') {
+                    await loadLibraryData();
+                }
+            }
+        }
+    } catch (e) {
+        console.error('[ReloadFavorites] Error:', e);
+    }
+}
+window.reloadUserFavorites = reloadUserFavorites;
+
+window.isViewingPublicFavorites = false;
+
+async function handleTogglePublicFavorites() {
+    window.isViewingPublicFavorites = !window.isViewingPublicFavorites;
+    if (window.isViewingPublicFavorites) {
+        // 切换到公开列表之前，先保存当前个人数据
+        if (currentListData && currentListData.username !== '_open') {
+            window.myPersonalListData = currentListData;
+        }
+        showInfo('已切换至【公开收藏】列表 (_open)');
+        const loaded = await fetchPublicListData();
+        if (!loaded) {
+            showError('加载公开收藏失败');
+            window.isViewingPublicFavorites = false;
+            // 恢复个人列表
+            if (window.myPersonalListData) {
+                currentListData = window.myPersonalListData;
+                window.currentListData = window.myPersonalListData;
+                renderMyLists(window.myPersonalListData);
+            }
+        } else {
+            if (typeof loadLibraryData === 'function') {
+                await loadLibraryData();
+            }
+        }
+    } else {
+        showInfo('已切换至【个人收藏】列表');
+        await reloadUserFavorites();
+        if (typeof loadLibraryData === 'function') {
+            await loadLibraryData();
+        }
+    }
+}
+window.handleTogglePublicFavorites = handleTogglePublicFavorites;
 
 let userTokenRefreshPromise = null;
 
@@ -483,6 +647,12 @@ window.handleHeaderLogout = handleHeaderLogout;
             if (typeof fetchSettingsFromServer === 'function') {
                 await fetchSettingsFromServer();
             }
+        }
+
+        // [新增] 检查公开收藏功能：若无账号登录且开启了公开收藏，拉取公共歌单作预览/管理
+        if (config['user.enablePublicFavorites'] && !isUserLoggedIn()) {
+            console.log('[Auth] 检测到已开启公开收藏且无账号登录，正在拉取公共歌单...');
+            await fetchPublicListData();
         }
 
         // [新增] 客户端模式自动连接远程同步 (仅在已登录到本地账户时触发，防止 _open 访客同步)
@@ -3435,7 +3605,15 @@ async function fetchSongUrl(song, quality, isRetry = false, isSilent = false) {
     const cleanedSong = cleanSongData(song);
     const cacheKey = `lx_url_${cleanedSong.id}_${quality}`;
 
+    // 0. 本地文件/带有本地播放 URL 的歌曲：直接播放本地文件，无需走在线 API 解析
+    if ((song.isLocal || song.url?.startsWith('/api/music/cache/file/')) && song.url && !isRetry) {
+        console.log(`[Cache] Direct Local File Hit: ${song.name}`);
+        let localUrl = await applyAutoProxy(song.url, song);
+        return { url: localUrl, sourceType: 'server_cache', quality: song.quality || quality };
+    }
+
     const shouldBypassServerCache = isRetry === 'local_retry' || isRetry === 'download';
+
     const allowServerCache = settings.preferServerCache !== false && !shouldBypassServerCache;
     if (allowServerCache) {
         let cacheResult = await checkServerCache(cleanedSong, quality, !!isRetry);
@@ -3695,13 +3873,37 @@ async function handleAdminAuth(message) {
 }
 window.handleAdminAuth = handleAdminAuth;
 
+/**
+ * 如果当前正在操作 _open 公开用户数据，且未登录管理员，则弹出登录设置并返回 false。
+ * 已登录管理员返回 true，允许继续操作。
+ */
+async function requireAdminForOpenWrite(action) {
+    const isOpen = currentListData?.username === '_open' || window.isViewingPublicFavorites;
+    if (!isOpen) return true; // 不是 _open 数据，无需验证
+    if (localStorage.getItem('lx_admin_password')) return true; // 已登录管理员
+    // 弹出管理员登录弹窗
+    const authorized = await handleAdminAuth(`该操作需要管理员权限：${action || '修改公开内容'}`);
+    return authorized;
+}
+window.requireAdminForOpenWrite = requireAdminForOpenWrite;
+
 // 管理员登录处理
 async function handleAdminLogin() {
     const authorized = await handleAdminAuth('请输入管理员密码进行登录验证');
     if (authorized) {
         showSuccess('管理员已登录');
-        syncSettingsUI(); // 刷新设置界面状态
-        if (typeof renderCustomSources === 'function') renderCustomSources(); // 登录成功后即时刷新自定义源列表（解除隐藏）
+        updateAdminUI();
+        syncSettingsUI();
+        if (typeof renderCustomSources === 'function') renderCustomSources();
+
+        // 未登录用户账号时：管理员应载入 _open 公开列表并对其操作
+        if (!isUserLoggedIn()) {
+            const loaded = await fetchPublicListData();
+            if (loaded) {
+                await loadLibraryData();
+            }
+        }
+        // 已登录用户账号时：不改变当前展示列表，管理员密码仅用于操作授权
     }
 }
 window.handleAdminLogin = handleAdminLogin;
@@ -3712,6 +3914,16 @@ async function handleAdminLogout() {
     localStorage.removeItem('lx_admin_password');
     updateAdminUI();
     syncSettingsUI();
+
+    // [核心新增] 如果当前使用的是 _open 公共列表，登出管理员后锁定列表显示
+    if (window.lx_config?.['user.enablePublicFavorites'] && (!userToken || !localStorage.getItem('lx_sync_user'))) {
+        currentListData = null;
+        window.currentListData = null;
+        if (typeof renderMyLists === 'function') {
+            renderMyLists(null);
+        }
+    }
+
     showSuccess('管理员已登出');
 }
 window.handleAdminLogout = handleAdminLogout;
@@ -3730,7 +3942,8 @@ function updateAdminUI() {
     if (adminTag) adminTag.classList.toggle('hidden', !isAdmin);
     if (logoutBtn) logoutBtn.classList.toggle('hidden', !isAdmin);
     if (loginBtn) {
-        loginBtn.classList.toggle('hidden', isAdmin || !window.lx_config?.['user.enablePublicRestriction'] || !isPublic);
+        // 只要未登录管理员，就显示「管理员登录」按钮
+        loginBtn.classList.toggle('hidden', isAdmin);
     }
     const manageBtn = document.getElementById('btn-custom-source-manage');
     if (manageBtn) {
@@ -4687,13 +4900,14 @@ function updatePlayerInfo(song) {
     const btnLike = document.getElementById('player-like-btn');
 
     let isCollected = false;
-    if (currentListData && song) {
+    const activeListData = isUserLoggedIn() ? (window.myPersonalListData || currentListData) : currentListData;
+    if (activeListData && song) {
         // 使用与添加时一致的标准化 ID 进行检查
         const cleanedSong = cleanSongData(song);
         if (cleanedSong) {
             const targetId = cleanedSong.id;
-            if (currentListData.loveList.some(s => s.id === targetId)) isCollected = true;
-            if (!isCollected && currentListData.userList.some(ul => ul.list.some(s => s.id === targetId))) isCollected = true;
+            if (activeListData.loveList && activeListData.loveList.some(s => s.id === targetId)) isCollected = true;
+            if (!isCollected && activeListData.userList && activeListData.userList.some(ul => ul.list.some(s => s.id === targetId))) isCollected = true;
         }
     }
 
@@ -5618,20 +5832,20 @@ async function updateSetting(key, value) {
     if (SETTINGS_UI_MAP[key]?.normalize) {
         value = SETTINGS_UI_MAP[key].normalize(value);
     }
-    const restrictedKeys = ['enableServerCache', 'enableServerLyricCache', 'serverCacheLocation', 'serverCacheNamingPattern', 'enableOnlyDownloadMode', 'enableRemaster', 'preferredQuality'];
-    const isPublic = !currentListData?.username || currentListData?.username === 'default';
+    const restrictedKeys = ['enableServerCache', 'enableServerLyricCache', 'serverCacheLocation', 'serverCacheNamingPattern', 'downloadConcurrency', 'enableOnlyDownloadMode', 'enableRemaster', 'preferredQuality', 'enablePublicSources', 'embedLyricToFile', 'preferServerCache'];
+    const isPublic = !isUserLoggedIn() || currentListData?.username === '_open' || currentListData?.username === 'default' || window.isViewingPublicFavorites;
     const enablePublicRestriction = window.lx_config?.['user.enablePublicRestriction'];
     const enableLoginCacheRestriction = window.lx_config?.['user.enableLoginCacheRestriction'];
     const isAdmin = !!localStorage.getItem('lx_admin_password');
 
-    // [新增] 权限校验：针对不同用户类型的受限设置项校验 (置灰逻辑由 syncSettingsUI 同步)
+    // 权限校验：针对不同用户类型的受限设置项校验 (置灰逻辑由 syncSettingsUI 同步)
     const isRestricted = !isAdmin && (
         (isPublic && enablePublicRestriction) ||
         (!isPublic && enableLoginCacheRestriction)
     );
 
     if (restrictedKeys.includes(key) && isRestricted) {
-        showError('权限不足：您的账号修改该设置项受限，请先验证管理员。');
+        showError('权限不足：公开受限模式下修改该设置项受限，请先验证管理员身份。');
         const authorized = await handleAdminAuth('该设置项受限，请输入管理员密码以修改');
         if (!authorized) {
             syncSettingsUI(key, settings[key]); // 还原 UI
@@ -5879,11 +6093,11 @@ const SETTINGS_UI_MAP = {
 
 //缓存设置项
 function syncSettingsUI(key = null, value = null) {
-    const isPublic = !currentListData?.username || currentListData?.username === 'default';
+    const isPublic = !isUserLoggedIn() || currentListData?.username === '_open' || currentListData?.username === 'default' || window.isViewingPublicFavorites;
     const enablePublicRestriction = window.lx_config?.['user.enablePublicRestriction'];
     const enableLoginCacheRestriction = window.lx_config?.['user.enableLoginCacheRestriction'];
     const isAdmin = !!localStorage.getItem('lx_admin_password');
-    const restrictedKeys = ['enableServerCache', 'enableServerLyricCache', 'serverCacheLocation', 'serverCacheNamingPattern', 'enableOnlyDownloadMode', 'enableRemaster', 'preferredQuality'];
+    const restrictedKeys = ['enableServerCache', 'enableServerLyricCache', 'serverCacheLocation', 'serverCacheNamingPattern', 'downloadConcurrency', 'enableOnlyDownloadMode', 'enableRemaster', 'preferredQuality', 'enablePublicSources', 'embedLyricToFile', 'preferServerCache'];
 
     const updateItem = (itemKey, itemValue, isSingle) => {
         const config = SETTINGS_UI_MAP[itemKey];
@@ -5899,7 +6113,7 @@ function syncSettingsUI(key = null, value = null) {
             if (config.type === 'checkbox') el.checked = !!itemValue;
             else el.value = itemValue;
 
-            // [新增] 禁用受限设置项 (针对公开受限或登录用户受限)
+            // 禁用受限设置项 (针对公开受限或登录用户受限)
             const isRestricted = !isAdmin && (
                 (isPublic && enablePublicRestriction) ||
                 (!isPublic && enableLoginCacheRestriction)
@@ -5907,12 +6121,11 @@ function syncSettingsUI(key = null, value = null) {
 
             if (restrictedKeys.includes(itemKey) && isRestricted) {
                 el.disabled = true;
-                // 查找父级 label 或容器进行置灰
-                const container = el.closest('.flex.items-center.justify-between') || el.parentElement;
+                const container = el.closest('.flex.items-center.justify-between') || el.closest('.setting-item') || el.parentElement;
                 if (container) container.classList.add('opacity-40', 'pointer-events-none');
-            } else {
+            } else if (restrictedKeys.includes(itemKey)) {
                 el.disabled = false;
-                const container = el.closest('.flex.items-center.justify-between') || el.parentElement;
+                const container = el.closest('.flex.items-center.justify-between') || el.closest('.setting-item') || el.parentElement;
                 if (container) container.classList.remove('opacity-40', 'pointer-events-none');
             }
         }
@@ -7464,23 +7677,33 @@ function refreshFavoritesChildrenHeight() {
     const list = document.getElementById('favorites-children');
     if (!list || list.style.height === '0px' || list.style.height === '') return;
 
+    const currentHeight = list.getBoundingClientRect().height;
+    list.style.height = 'auto';
+    const targetHeight = list.scrollHeight;
+    list.style.height = currentHeight + 'px';
+
     requestAnimationFrame(() => {
-        list.style.height = list.scrollHeight + 'px';
+        list.style.height = targetHeight + 'px';
     });
 }
 
 function toggleFavorites() {
     const list = document.getElementById('favorites-children');
     const arrow = document.getElementById('favorites-arrow');
+    if (!list) return;
 
     // Toggle logic
     if (list.style.height === '0px' || list.style.height === '') {
-        list.style.height = 'auto'; // Estimate or auto
-        list.style.height = list.scrollHeight + 'px'; // Smooth transition
-        arrow.style.transform = 'rotate(0deg)'; // Arrow down
+        list.style.height = 'auto';
+        const targetHeight = list.scrollHeight;
+        list.style.height = '0px';
+        requestAnimationFrame(() => {
+            list.style.height = targetHeight + 'px';
+        });
+        if (arrow) arrow.style.transform = 'rotate(0deg)'; // Arrow down
     } else {
         list.style.height = '0px';
-        arrow.style.transform = 'rotate(-90deg)'; // Arrow right
+        if (arrow) arrow.style.transform = 'rotate(-90deg)'; // Arrow right
     }
 }
 
@@ -7497,23 +7720,52 @@ window.libraryData = { artists: [], albums: [] };
 window.libraryBatchSelected = new Set();
 window.libraryBatchMode = false; // 'artist' | 'album' | false
 
-/** 从后端加载两个 library 文件 */
+/** 从后端加载两个 library 文件（自动感知公开收藏状态） */
 async function loadLibraryData() {
     try {
-        const headers = getUserAuthHeaders();
+        const isPublic = window.isViewingPublicFavorites === true || !isUserLoggedIn();
+        let headers = {};
+        let artistsUrl = '/api/user/library/artists';
+        let albumsUrl  = '/api/user/library/albums';
+
+        if (isPublic) {
+            // 公开收藏模式：拉 _open 的歌手/专辑库
+            const adminPass = localStorage.getItem('lx_admin_password');
+            if (adminPass) headers['x-frontend-auth'] = adminPass;
+            headers['x-user-name'] = '_open';
+            artistsUrl += '?user=_open';
+            albumsUrl  += '?user=_open';
+        } else {
+            headers = getUserAuthHeaders();
+        }
+
         const [ar, al] = await Promise.all([
-            fetch('/api/user/library/artists', { headers }).then(r => r.ok ? r.json() : []),
-            fetch('/api/user/library/albums', { headers }).then(r => r.ok ? r.json() : [])
+            fetch(artistsUrl, { headers }).then(r => r.ok ? r.json() : []),
+            fetch(albumsUrl,  { headers }).then(r => r.ok ? r.json() : [])
         ]);
         window.libraryData.artists = Array.isArray(ar) ? ar : [];
-        window.libraryData.albums = Array.isArray(al) ? al : [];
+        window.libraryData.albums  = Array.isArray(al) ? al : [];
+
+        if (!isPublic && isUserLoggedIn()) {
+            window.myPersonalLibraryData = {
+                artists: [...window.libraryData.artists],
+                albums: [...window.libraryData.albums]
+            };
+        }
+
         // 刷新侧边栏数量
         refreshLibrarySidebarCount();
+        if (window.currentViewingListId === '__lib_artists__' && typeof renderLibraryArtists === 'function') {
+            renderLibraryArtists(window.libraryData.artists);
+        } else if (window.currentViewingListId === '__lib_albums__' && typeof renderLibraryAlbums === 'function') {
+            renderLibraryAlbums(window.libraryData.albums);
+        }
     } catch (e) {
         console.warn('[Library] 加载失败:', e);
     }
 }
 window.loadLibraryData = loadLibraryData;
+
 
 /** 刷新侧边栏常驻项的数量徽标 */
 function refreshLibrarySidebarCount() {
@@ -7523,85 +7775,148 @@ function refreshLibrarySidebarCount() {
     if (albCount) albCount.textContent = window.libraryData.albums.length;
 }
 
-/** 持久化 artists 到后端 */
-async function saveLibraryArtists() {
+/** 持久化 artists 到后端（自动感知公开收藏状态） */
+async function saveLibraryArtists(customList = null) {
     try {
-        await fetch('/api/user/library/artists', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
-            body: JSON.stringify(window.libraryData.artists)
-        });
+        const isPublic = !isUserLoggedIn() || (!customList && window.isViewingPublicFavorites);
+        const listToSave = customList || window.libraryData.artists;
+        let headers = { 'Content-Type': 'application/json' };
+        let url = '/api/user/library/artists';
+        if (isPublic) {
+            const adminPass = localStorage.getItem('lx_admin_password');
+            if (adminPass) headers['x-frontend-auth'] = adminPass;
+            headers['x-user-name'] = '_open';
+            url += '?user=_open';
+        } else {
+            headers = { 'Content-Type': 'application/json', ...getUserAuthHeaders() };
+        }
+        await fetch(url, { method: 'POST', headers, body: JSON.stringify(listToSave) });
         refreshLibrarySidebarCount();
     } catch (e) { console.error('[Library] 保存歌手失败:', e); }
 }
 
-/** 持久化 albums 到后端 */
-async function saveLibraryAlbums() {
+/** 持久化 albums 到后端（自动感知公开收藏状态） */
+async function saveLibraryAlbums(customList = null) {
     try {
-        await fetch('/api/user/library/albums', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
-            body: JSON.stringify(window.libraryData.albums)
-        });
+        const isPublic = !isUserLoggedIn() || (!customList && window.isViewingPublicFavorites);
+        const listToSave = customList || window.libraryData.albums;
+        let headers = { 'Content-Type': 'application/json' };
+        let url = '/api/user/library/albums';
+        if (isPublic) {
+            const adminPass = localStorage.getItem('lx_admin_password');
+            if (adminPass) headers['x-frontend-auth'] = adminPass;
+            headers['x-user-name'] = '_open';
+            url += '?user=_open';
+        } else {
+            headers = { 'Content-Type': 'application/json', ...getUserAuthHeaders() };
+        }
+        await fetch(url, { method: 'POST', headers, body: JSON.stringify(listToSave) });
         refreshLibrarySidebarCount();
     } catch (e) { console.error('[Library] 保存专辑失败:', e); }
 }
 
+
 /** 切换歌手收藏；返回最新收藏状态 true/false */
 async function toggleArtistFavorite(id, source, name, picUrl) {
-    if (!getUserAuthHeaders()['x-user-token'] && !getUserAuthHeaders()['x-user-name']) {
-        showError('请先登录后再收藏'); return false;
-    }
-    const list = window.libraryData.artists;
-    const idx = list.findIndex(a => String(a.id) === String(id) && a.source === source);
-    if (idx >= 0) {
-        list.splice(idx, 1);
-        await saveLibraryArtists();
-        showInfo(`已取消收藏歌手「${name}」`);
-        return false;
+    if (isUserLoggedIn()) {
+        const targetList = (window.isViewingPublicFavorites && window.myPersonalLibraryData)
+            ? window.myPersonalLibraryData.artists
+            : window.libraryData.artists;
+
+        const idx = targetList.findIndex(a => String(a.id) === String(id) && a.source === source);
+        if (idx >= 0) {
+            targetList.splice(idx, 1);
+            await saveLibraryArtists(targetList);
+            showInfo(`已取消收藏歌手「${name}」`);
+            return false;
+        } else {
+            targetList.push({ id, source, name, picUrl: picUrl || '' });
+            await saveLibraryArtists(targetList);
+            showSuccess(`已收藏歌手「${name}」`);
+            return true;
+        }
     } else {
-        list.push({ id, source, name, picUrl: picUrl || '' });
-        await saveLibraryArtists();
-        showSuccess(`已收藏歌手「${name}」`);
-        return true;
+        if (!(await requireAdminForOpenWrite('修改公开收藏歌手'))) return false;
+        const list = window.libraryData.artists;
+        const idx = list.findIndex(a => String(a.id) === String(id) && a.source === source);
+        if (idx >= 0) {
+            list.splice(idx, 1);
+            await saveLibraryArtists(list);
+            showInfo(`已取消公开收藏歌手「${name}」`);
+            return false;
+        } else {
+            list.push({ id, source, name, picUrl: picUrl || '' });
+            await saveLibraryArtists(list);
+            showSuccess(`已收藏公开歌手「${name}」`);
+            return true;
+        }
     }
 }
 window.toggleArtistFavorite = toggleArtistFavorite;
 
 /** 检查歌手是否已收藏 */
 function isArtistFavorited(id, source) {
-    return window.libraryData.artists.some(a => String(a.id) === String(id) && a.source === source);
+    const list = (isUserLoggedIn() && window.isViewingPublicFavorites && window.myPersonalLibraryData)
+        ? window.myPersonalLibraryData.artists
+        : window.libraryData.artists;
+    return list.some(a => String(a.id) === String(id) && a.source === source);
 }
 window.isArtistFavorited = isArtistFavorited;
 
 /** 切换专辑收藏；返回最新收藏状态 true/false */
 async function toggleAlbumFavorite(id, source, name, picUrl, artistName) {
-    if (!getUserAuthHeaders()['x-user-token'] && !getUserAuthHeaders()['x-user-name']) {
-        showError('请先登录后再收藏'); return false;
-    }
-    const list = window.libraryData.albums;
-    const idx = list.findIndex(a => String(a.id) === String(id) && a.source === source);
-    if (idx >= 0) {
-        list.splice(idx, 1);
-        await saveLibraryAlbums();
-        showInfo(`已取消收藏专辑「${name}」`);
-        return false;
+    if (isUserLoggedIn()) {
+        const targetList = (window.isViewingPublicFavorites && window.myPersonalLibraryData)
+            ? window.myPersonalLibraryData.albums
+            : window.libraryData.albums;
+
+        const idx = targetList.findIndex(a => String(a.id) === String(id) && a.source === source);
+        if (idx >= 0) {
+            targetList.splice(idx, 1);
+            await saveLibraryAlbums(targetList);
+            showInfo(`已取消收藏专辑「${name}」`);
+            return false;
+        } else {
+            targetList.push({
+                id,
+                source,
+                name,
+                picUrl: picUrl || '',
+                artistName: artistName || '',
+                interval: '00:00',
+                meta: { albumId: id, picUrl: picUrl || '', albumName: name }
+            });
+            await saveLibraryAlbums(targetList);
+            showSuccess(`已收藏专辑「${name}」`);
+            return true;
+        }
     } else {
-        list.push({
-            id,
-            source,
-            name,
-            picUrl: picUrl || '',
-            artistName: artistName || '',
-            interval: '00:00',
-            meta: { albumId: id, picUrl: picUrl || '', albumName: name }
-        });
-        await saveLibraryAlbums();
-        showSuccess(`已收藏专辑「${name}」`);
-        return true;
+        if (!(await requireAdminForOpenWrite('修改公开收藏专辑'))) return false;
+        const list = window.libraryData.albums;
+        const idx = list.findIndex(a => String(a.id) === String(id) && a.source === source);
+        if (idx >= 0) {
+            list.splice(idx, 1);
+            await saveLibraryAlbums(list);
+            showInfo(`已取消公开收藏专辑「${name}」`);
+            return false;
+        } else {
+            list.push({
+                id,
+                source,
+                name,
+                picUrl: picUrl || '',
+                artistName: artistName || '',
+                interval: '00:00',
+                meta: { albumId: id, picUrl: picUrl || '', albumName: name }
+            });
+            await saveLibraryAlbums(list);
+            showSuccess(`已收藏公开专辑「${name}」`);
+            return true;
+        }
     }
 }
 window.toggleAlbumFavorite = toggleAlbumFavorite;
+
 
 /**
  * [新增] 当加载专辑详情后，更新收藏库中该专辑的元数据（如音质列表、时长等）
@@ -7694,7 +8009,10 @@ window.syncAllLibraryAlbums = syncAllLibraryAlbums;
 
 /** 检查专辑是否已收藏 */
 function isAlbumFavorited(id, source) {
-    return window.libraryData.albums.some(a => String(a.id) === String(id) && a.source === source);
+    const list = (isUserLoggedIn() && window.isViewingPublicFavorites && window.myPersonalLibraryData)
+        ? window.myPersonalLibraryData.albums
+        : window.libraryData.albums;
+    return list.some(a => String(a.id) === String(id) && a.source === source);
 }
 window.isAlbumFavorited = isAlbumFavorited;
 
@@ -7993,6 +8311,9 @@ function updateLibArtistBatchCount() {
 }
 async function libDeleteSelectedArtists() {
     if (window.libraryBatchSelected.size === 0) { showInfo('请先选择要删除的歌手'); return; }
+    if (window.isViewingPublicFavorites || !isUserLoggedIn()) {
+        if (!(await requireAdminForOpenWrite('删除公开收藏歌手'))) return;
+    }
     const confirmed = await showSelect('删除收藏歌手', `确定删除选中的 ${window.libraryBatchSelected.size} 位歌手吗？`, { danger: true });
     if (!confirmed) return;
     window.libraryData.artists = window.libraryData.artists.filter(a => !window.libraryBatchSelected.has(String(a.id)));
@@ -8002,6 +8323,9 @@ async function libDeleteSelectedArtists() {
     showSuccess('已删除所选歌手');
 }
 async function removeLibraryArtist(id, source) {
+    if (window.isViewingPublicFavorites || !isUserLoggedIn()) {
+        if (!(await requireAdminForOpenWrite('删除公开收藏歌手'))) return;
+    }
     window.libraryData.artists = window.libraryData.artists.filter(a => !(String(a.id) === String(id) && a.source === source));
     await saveLibraryArtists();
     renderLibraryArtists(window.libraryData.artists);
@@ -8063,6 +8387,9 @@ function updateLibAlbumBatchCount() {
 }
 async function libDeleteSelectedAlbums() {
     if (window.libraryBatchSelected.size === 0) { showInfo('请先选择要删除的专辑'); return; }
+    if (window.isViewingPublicFavorites || !isUserLoggedIn()) {
+        if (!(await requireAdminForOpenWrite('删除公开收藏专辑'))) return;
+    }
     const confirmed = await showSelect('删除收藏专辑', `确定删除选中的 ${window.libraryBatchSelected.size} 张专辑吗？`, { danger: true });
     if (!confirmed) return;
     window.libraryData.albums = window.libraryData.albums.filter(a => !window.libraryBatchSelected.has(String(a.id)));
@@ -8072,11 +8399,15 @@ async function libDeleteSelectedAlbums() {
     showSuccess('已删除所选专辑');
 }
 async function removeLibraryAlbum(id, source) {
+    if (window.isViewingPublicFavorites || !isUserLoggedIn()) {
+        if (!(await requireAdminForOpenWrite('删除公开收藏专辑'))) return;
+    }
     window.libraryData.albums = window.libraryData.albums.filter(a => !(String(a.id) === String(id) && a.source === source));
     await saveLibraryAlbums();
     renderLibraryAlbums(window.libraryData.albums);
     showInfo('已取消收藏');
 }
+
 window.enterLibraryAlbumBatch = enterLibraryAlbumBatch;
 window.exitLibraryAlbumBatch = exitLibraryAlbumBatch;
 window.libSelectAllAlbums = libSelectAllAlbums;
@@ -8282,6 +8613,8 @@ async function handleSyncLogout() {
     }
 
     currentListData = null;
+    window.myPersonalListData = null;
+    window.isViewingPublicFavorites = false;
     localStorage.removeItem('lx_sync_mode');
     localStorage.removeItem('lx_sync_user');
     localStorage.removeItem('lx_sync_pass');
@@ -8367,6 +8700,7 @@ async function handleLocalLogin() {
             const listData = await syncManager.sync();
             currentListData = listData;
             if (currentListData) currentListData.username = user; // Attach username
+            window.myPersonalListData = currentListData; // [个人数据缓存]
             renderMyLists(listData);
 
             // [Library] 登录后加载收藏歌手/专辑
@@ -8779,6 +9113,26 @@ async function handleRemoteOverwriteConnect(silent = false) {
     }
 }
 
+async function handleRemoveList(listId, event) {
+    event.stopPropagation();
+    if (!(await showSelect('删除歌单', '确定要删除歌单吗？', { danger: true }))) return;
+
+    // 公开歌单需要管理员权限
+    if (!(await requireAdminForOpenWrite('删除公开歌单'))) return;
+
+    if (currentListData) {
+        const index = currentListData.userList.findIndex(l => l.id === listId);
+        if (index >= 0) {
+            currentListData.userList.splice(index, 1);
+            try {
+                await pushDataChange();
+                renderMyLists(currentListData);
+            } catch (e) {
+                showError('删除同步失败');
+            }
+        }
+    }
+}
 
 function getFavoriteSidebarOrder() {
     return Array.isArray(settings.favoriteSidebarOrder) ? settings.favoriteSidebarOrder : [];
@@ -8925,10 +9279,34 @@ function renderMyLists(data) {
         `;
         return div;
     };
-    const sidebarItems = [
+    const sidebarItems = [];
+
+    // [新增] 当开启了 enablePublicFavorites 且已登录账号时，在侧边栏第一行添加“公开收藏”
+    const enablePublicFavorites = !!window.lx_config?.['user.enablePublicFavorites'];
+    const isUserLoggedIn = typeof window.isUserLoggedIn === 'function' ? window.isUserLoggedIn() : false;
+
+    if (enablePublicFavorites && isUserLoggedIn) {
+        const isPublicActive = window.isViewingPublicFavorites === true;
+        const publicFavItem = document.createElement('div');
+        publicFavItem.className = `px-6 py-2 text-sm cursor-pointer flex items-center group transition-colors overflow-hidden ${isPublicActive ? 'text-emerald-500 font-bold bg-emerald-500/10' : 't-text-muted hover:t-bg-main'}`;
+        publicFavItem.setAttribute('data-sidebar-list-id', '__public_favorites__');
+        publicFavItem.setAttribute('data-sidebar-sort-id', '__public_favorites__');
+        publicFavItem.onclick = () => handleTogglePublicFavorites();
+        publicFavItem.innerHTML = `
+            <span class="favorite-sidebar-drag-handle cursor-grab t-text-muted/60 hover:text-emerald-500 mr-2 flex-shrink-0 touch-none" title="拖拽排序">
+                <i class="fas fa-grip-vertical text-xs"></i>
+            </span>
+            <i class="fas fa-globe w-5 ${isPublicActive ? 'text-emerald-500' : 't-text-muted group-hover:text-emerald-500'} transition-colors flex-shrink-0"></i>
+            <span class="ml-2 flex-1 truncate">公开收藏</span>
+            <span class="text-[10px] px-1.5 py-0.5 rounded-full ${isPublicActive ? 'bg-emerald-500 text-white font-bold' : 'bg-gray-200 dark:bg-gray-700 text-gray-500'}">${isPublicActive ? '已开启' : '切换'}</span>
+        `;
+        sidebarItems.push({ id: '__public_favorites__', type: 'system', el: publicFavItem });
+    }
+
+    sidebarItems.push(
         { id: '__lib_artists__', type: 'lib', el: createLibItem('__lib_artists__', '收藏歌手', 'fa-user', 'lib-artist-count', handleArtistLibraryClick) },
         { id: '__lib_albums__', type: 'lib', el: createLibItem('__lib_albums__', '收藏专辑', 'fa-compact-disc', 'lib-album-count', handleAlbumLibraryClick) }
-    ];
+    );
 
     if (data.defaultList) {
         sidebarItems.push({ id: 'default', type: 'system', el: createItem('default', '默认列表', 'fa-list', data.defaultList.length) });
@@ -9082,16 +9460,22 @@ async function handleCreateList() {
     });
 
     if (name && currentListData) {
+        const activeListData = (window.isViewingPublicFavorites && window.myPersonalListData) ? window.myPersonalListData : currentListData;
+
+        // 公开列表新建歌单需要管理员权限
+        if (activeListData.username === '_open') {
+            if (!(await requireAdminForOpenWrite('公开列表中新建歌单'))) return;
+        }
         const newList = {
             id: 'webplayer_' + Date.now(),
             name: name,
             source: 'webplayer',
             list: []
         };
-        currentListData.userList.push(newList);
+        activeListData.userList.push(newList);
         // Sync
         try {
-            await pushDataChange();
+            await pushDataChange(activeListData);
             renderMyLists(currentListData);
             // Re-render the add modal grid if it is open (or just to keep it fresh)
             if (typeof renderPlaylistAddGrid === 'function') {
@@ -9212,25 +9596,34 @@ function formatSongToLxMusicStandard(item) {
 }
 
 function collectCurrentSongList() {
-    if (!currentListData || typeof window.SongListManager === 'undefined') return;
+    const activeListData = isUserLoggedIn() ? (window.myPersonalListData || currentListData) : currentListData;
+    if (!activeListData || typeof window.SongListManager === 'undefined') return;
     const detail = window.SongListManager.getCurrentDetail();
     if (!detail || !detail.id || !detail.list || detail.list.length === 0) {
         if (window.showToast) window.showToast('error', '歌单数据不完整或为空');
         return;
     }
 
-    // Check if already collected
-    const existingIndex = currentListData.userList.findIndex(l => String(l.sourceListId) === String(detail.id) && l.source === detail.source);
+    if (!isUserLoggedIn() && activeListData.username === '_open') {
+        requireAdminForOpenWrite('收藏歌单到公开列表').then(ok => {
+            if (ok) _executeCollectSongList(activeListData, detail);
+        });
+        return;
+    }
+
+    _executeCollectSongList(activeListData, detail);
+}
+
+function _executeCollectSongList(activeListData, detail) {
+    const existingIndex = activeListData.userList.findIndex(l => String(l.sourceListId) === String(detail.id) && l.source === detail.source);
     if (existingIndex >= 0) {
         if (window.showToast) window.showToast('info', '该歌单已在您的收藏中');
         return;
     }
 
-    // Generate random 32 chars hex string for id consistency with other clients
     const randomHex = () => Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0');
     const newId = `${detail.source}_${randomHex()}${randomHex()}${randomHex()}${randomHex()}`;
 
-    // Make sure each song has the source attribute and correct id format
     const listWithSource = detail.list.map(s => {
         const item = formatSongToLxMusicStandard(s);
         if (!item.source) item.source = detail.source;
@@ -9247,10 +9640,9 @@ function collectCurrentSongList() {
         list: listWithSource
     };
 
-    currentListData.userList.push(newList);
+    activeListData.userList.push(newList);
 
-    // Sync
-    pushDataChange().then(() => {
+    pushDataChange(activeListData).then(() => {
         renderMyLists(currentListData);
         if (window.showToast) window.showToast('success', '歌单收藏成功！');
     }).catch(err => {
@@ -9260,25 +9652,26 @@ function collectCurrentSongList() {
 }
 
 async function toggleLove() {
-    if (!currentListData || currentIndex < 0) return;
-    const song = currentPlaylist[currentIndex];
+    const activeListData = isUserLoggedIn() ? (window.myPersonalListData || currentListData) : currentListData;
+    if (!activeListData || currentIndex < 0) return;
 
-    // Format song to standardized format
+    if (!isUserLoggedIn() && activeListData.username === '_open') {
+        if (!(await requireAdminForOpenWrite('收藏歌曲到公开列表'))) return;
+    }
+
+    const song = currentPlaylist[currentIndex];
     const formattedSong = formatSongToLxMusicStandard(song);
     let targetId = formattedSong.id || song.id;
 
-    const index = currentListData.loveList.findIndex(s => s.id === targetId || s.id === song.id);
+    const index = activeListData.loveList.findIndex(s => s.id === targetId || s.id === song.id);
     if (index >= 0) {
-        currentListData.loveList.splice(index, 1);
+        activeListData.loveList.splice(index, 1);
     } else {
-        currentListData.loveList.push(formattedSong);
+        activeListData.loveList.push(formattedSong);
     }
 
-    // Update UI immediately
     updatePlayerInfo(song);
-
-    // Sync
-    await pushDataChange();
+    await pushDataChange(activeListData);
 }
 
 async function handleRefreshList(listId, event, silent = false) {
@@ -9370,23 +9763,6 @@ async function handleJumpToOriginalList(listId, event) {
     }
 }
 
-async function handleRemoveList(listId, event) {
-    event.stopPropagation();
-    if (!(await showSelect('删除歌单', '确定要删除此歌单吗？', { danger: true }))) return;
-
-    if (currentListData) {
-        const index = currentListData.userList.findIndex(l => l.id === listId);
-        if (index >= 0) {
-            currentListData.userList.splice(index, 1);
-            try {
-                await pushDataChange();
-                renderMyLists(currentListData);
-            } catch (e) {
-                showError('删除同步失败');
-            }
-        }
-    }
-}
 
 // Auto-restore on page load
 document.addEventListener('DOMContentLoaded', async () => {
@@ -9433,16 +9809,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.error('[PlayMode] 恢复播放模式失败:', e);
     }
 
-    // 1. Restore cached list data (from IndexedDB)
+    // 1. Restore cached list data (from IndexedDB) for logged in user only
     try {
         const cachedList = await window.ListStore.get();
-        if (cachedList) {
+        if (cachedList && isUserLoggedIn()) {
             currentListData = cachedList;
             const savedUser = localStorage.getItem('lx_sync_user');
-            if (savedUser && currentListData) currentListData.username = savedUser; // Restore username from cache
-
+            if (savedUser && currentListData) {
+                currentListData.username = savedUser;
+            }
+            window.myPersonalListData = currentListData;
             renderMyLists(currentListData);
-            console.log('[Cache] 已恢复缓存的列表数据');
+            console.log('[Cache] 已恢复缓存的个人列表数据');
         }
     } catch (e) {
         console.error('[Cache] 恢复列表数据失败:', e);
@@ -9531,11 +9909,66 @@ window.handleSyncLogout = handleSyncLogout;
 window.resetAllSettings = resetAllSettings;
 
 // Helper to Push Changes to Remote
-async function pushDataChange() {
-    if (!currentListData) return;
+async function pushDataChange(customListData) {
+    const listToSave = customListData || currentListData;
+    if (!listToSave) return;
+
+    // 1. 优先同步保存到客户端 IndexedDB 本地缓存
+    await window.ListStore.set(listToSave).catch(e => console.error('[IDBStore] 保存失败:', e));
+
+    const isUserLoggedIn = !!userToken && localStorage.getItem('lx_sync_mode') === 'local';
+    const isPublicList = listToSave.username === '_open' || listToSave.username === 'default';
+
+    // 2. 如果是公开/未登录用户且开启了公开收藏开关
+    if (isPublicList && window.lx_config?.['user.enablePublicFavorites']) {
+        const isAdmin = !!localStorage.getItem('lx_admin_password');
+        if (isAdmin) {
+            try {
+                const res = await fetch('/api/user/list?user=_open', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...getUserAuthHeaders()
+                    },
+                    body: JSON.stringify(listToSave)
+                });
+                if (!res.ok) {
+                    const errorText = await res.text();
+                    console.error('[PublicList] 推送保存公共歌单失败:', errorText);
+                    showError('保存公共歌单失败: ' + errorText);
+                    return;
+                }
+                console.log('[PublicList] 公共歌单成功保存至服务器');
+            } catch (e) {
+                console.error('[PublicList] 推送公共歌单网络异常:', e);
+            }
+        }
+        return;
+    }
+
+    // 3. 登录普通用户的 SyncManager 推送逻辑
     try {
-        await window.SyncManager.push(currentListData);
-        console.log('Data Pushed to Remote');
+        if (window.SyncManager && window.SyncManager.client) {
+            await window.SyncManager.push(listToSave);
+            console.log('Data Pushed to Remote');
+        } else {
+            // 本地无同步模式：调用 REST API 推送给当前用户
+            const headers = getUserAuthHeaders();
+            if (headers['x-user-name'] === '_open') {
+                const syncUser = localStorage.getItem('lx_sync_user');
+                if (syncUser) headers['x-user-name'] = syncUser;
+                else delete headers['x-user-name'];
+            }
+            const res = await fetch('/api/user/list', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...headers
+                },
+                body: JSON.stringify(listToSave)
+            });
+            if (!res.ok) throw new Error(await res.text());
+        }
     } catch (e) {
         console.error('Push Failed', e);
     }
@@ -9546,6 +9979,9 @@ async function refreshUserListData() {
     try {
         const listData = await window.SyncManager.sync();
         window.currentListData = listData;
+        if (listData && listData.username !== '_open') {
+            window.myPersonalListData = listData;
+        }
         if (typeof renderMyLists === 'function') {
             renderMyLists(listData);
         }
@@ -10345,14 +10781,16 @@ function renderPlaylistAddGrid() {
         return btn;
     };
 
+    const activeListData = isUserLoggedIn() ? (window.myPersonalListData || currentListData) : currentListData;
+
     // 1. My Love
-    const loveList = currentListData.loveList || [];
+    const loveList = activeListData.loveList || [];
     const isLoved = !isBatch && targetId && loveList.some(s => s.id === targetId);
     listContainer.appendChild(createGridItem('love', '我的收藏', loveList.length, isLoved));
 
     // 2. User Lists
-    if (currentListData.userList) {
-        currentListData.userList.forEach(list => {
+    if (activeListData.userList) {
+        activeListData.userList.forEach(list => {
             const isIncluded = !isBatch && targetId && list.list.some(s => s.id === targetId);
             listContainer.appendChild(createGridItem(list.id, list.name, list.list.length, isIncluded));
         });
@@ -10499,6 +10937,11 @@ function cleanSongData(song) {
         meta: meta
     };
 
+    if (song.isLocal) cleanSong.isLocal = song.isLocal;
+    if (song.url) cleanSong.url = song.url;
+    if (song.folder) cleanSong.folder = song.folder;
+    if (song.filename) cleanSong.filename = song.filename;
+
     // Remove undefined keys
     const removeUndefined = (obj) => {
         Object.keys(obj).forEach(key => {
@@ -10515,7 +10958,12 @@ function cleanSongData(song) {
 // Modified handler for Grid Buttons
 async function handleTogglePlaylist(listId, btnElement) {
     if (!currentListData) return;
+    const activeListData = isUserLoggedIn() ? (window.myPersonalListData || currentListData) : currentListData;
 
+    // 未登录账号且正在对 _open 公开列表进行修改时，需要管理员权限
+    if (!isUserLoggedIn() && activeListData.username === '_open') {
+        if (!(await requireAdminForOpenWrite('修改公开收藏'))) return;
+    }
     const isBatch = !!window.batchCollectSongs;
     const songs = isBatch ? window.batchCollectSongs : [currentPlayingSong];
     if (songs.length === 0 || !songs[0]) return;
@@ -10527,8 +10975,8 @@ async function handleTogglePlaylist(listId, btnElement) {
 
         // 1. Find target list in memory (Optimistic Update)
         let targetListArray = null;
-        if (listId === 'love') targetListArray = currentListData.loveList;
-        else targetListArray = currentListData.userList.find(l => l.id === listId)?.list;
+        if (listId === 'love') targetListArray = activeListData.loveList;
+        else targetListArray = activeListData.userList.find(l => l.id === listId)?.list;
 
         if (!targetListArray) {
             showError('未找到目标歌单');
@@ -10566,13 +11014,19 @@ async function handleTogglePlaylist(listId, btnElement) {
 
             if (isRemoteSync) {
                 // 远程模式：推送更新
-                await pushDataChange();
+                await pushDataChange(activeListData);
                 showSuccess(`成功批量同步 ${addedSongs.length} 首歌曲`);
             } else {
                 // 本地模式：调用 API 同步后端存储
+                const headers = getUserAuthHeaders();
+                if (headers['x-user-name'] === '_open') {
+                    const syncUser = localStorage.getItem('lx_sync_user');
+                    if (syncUser) headers['x-user-name'] = syncUser;
+                    else delete headers['x-user-name'];
+                }
                 const res = await fetch('/api/music/user/list/add', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', ...getUserAuthHeaders() },
+                    headers: { 'Content-Type': 'application/json', ...headers },
                     body: JSON.stringify({
                         listId: listId,
                         musicInfos: addedSongs
@@ -10601,9 +11055,9 @@ async function handleTogglePlaylist(listId, btnElement) {
     const song = songs[0];
     let targetListArray;
     if (listId === 'love') {
-        targetListArray = currentListData.loveList;
+        targetListArray = activeListData.loveList;
     } else {
-        const uList = currentListData.userList.find(l => l.id === listId);
+        const uList = activeListData.userList.find(l => l.id === listId);
         if (uList) targetListArray = uList.list;
     }
 
@@ -10627,7 +11081,7 @@ async function handleTogglePlaylist(listId, btnElement) {
             if (idx >= 0) targetListArray.splice(idx, 1);
         }
 
-        await pushDataChange();
+        await pushDataChange(activeListData);
         renderMyLists(currentListData);
     } catch (e) {
         showError('同步失败: ' + e.message);
@@ -11277,6 +11731,22 @@ async function handleDownloadClick(event) {
         return;
     }
 
+    // 权限校验：公开受限模式下，如果管理员关闭了“缓存歌曲文件”功能，则下载/缓存歌曲需要验证管理员身份
+    const isPublic = !isUserLoggedIn() || !window.currentListData?.username || window.currentListData?.username === 'default' || window.currentListData?.username === '_open';
+    const enablePublicRestriction = window.lx_config?.['user.enablePublicRestriction'];
+    const isAdmin = !!localStorage.getItem('lx_admin_password');
+    const isServerCacheAllowed = window.settings?.enableServerCache === true;
+
+    if (isPublic && enablePublicRestriction && !isServerCacheAllowed && !isAdmin) {
+        showError('权限限制：管理员已关闭缓存歌曲功能，下载歌曲需要验证管理员身份。');
+        if (typeof window.handleAdminAuth === 'function') {
+            const authorized = await window.handleAdminAuth('管理员已关闭缓存歌曲文件功能，下载歌曲需要验证管理员身份');
+            if (!authorized) return;
+        } else {
+            return;
+        }
+    }
+
     const song = currentPlayingSong;
     
     // [优化] 检测是否已缓存
@@ -11301,22 +11771,6 @@ async function handleDownloadClick(event) {
         if (!isOnlyDownload && isCached) {
             showInfo('该歌曲已在服务器缓存');
             return;
-        }
-
-        // [新增] 权限校验：受限公开用户需要验证管理员
-        const isPublic = !window.currentListData?.username || window.currentListData?.username === 'default';
-        const enablePublicRestriction = window.lx_config?.['user.enablePublicRestriction'];
-        const isAdmin = !!localStorage.getItem('lx_admin_password');
-        const isServerCacheAllowed = window.settings?.enableServerCache === true;
-
-        if (isPublic && enablePublicRestriction && !isServerCacheAllowed && !isAdmin && !isOnlyDownload) {
-            showError('权限限制：缓存到服务器需要验证管理员。');
-            if (typeof window.handleAdminAuth === 'function') {
-                const authorized = await window.handleAdminAuth('缓存到服务器需要验证管理员身份、打开缓存歌曲文件设置或开启仅下载模式');
-                if (!authorized) return;
-            } else {
-                return;
-            }
         }
 
         if (typeof downloadSong === 'function') {

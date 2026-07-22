@@ -205,12 +205,43 @@ window.LocalMusicManager = {
         }
     },
 
+    isViewingPublicSongs: false,
+
+    togglePublicSongs() {
+        this.isViewingPublicSongs = !this.isViewingPublicSongs;
+        this.syncPublicSongsBtn();
+        if (typeof showInfo === 'function') {
+            showInfo(this.isViewingPublicSongs ? '已切换至【公开歌曲】库 (_open)' : '已切换至【个人本地歌曲】');
+        }
+        this.fetchData();
+    },
+
+    syncPublicSongsBtn() {
+        const btn = document.getElementById('lm-public-songs-btn');
+        if (!btn) return;
+        const enablePublicFavorites = !!window.lx_config?.['user.enablePublicFavorites'];
+        const isLoggedIn = typeof window.isUserLoggedIn === 'function' ? window.isUserLoggedIn() : false;
+        if (enablePublicFavorites && isLoggedIn) {
+            btn.classList.remove('hidden');
+            if (this.isViewingPublicSongs) {
+                btn.className = 'text-[9px] md:text-[10px] font-bold px-2 py-0.5 rounded-lg bg-emerald-500 text-white shadow-sm transition-all flex items-center gap-1 order-4 md:order-3 cursor-pointer';
+                btn.innerHTML = '<i class="fas fa-globe text-[10px]"></i><span>公开歌曲 (已开启)</span>';
+            } else {
+                btn.className = 'text-[9px] md:text-[10px] font-bold px-2 py-0.5 rounded-lg bg-gray-100/50 dark:bg-gray-700/30 text-gray-600 dark:text-gray-300 border t-border-main hover:text-emerald-500 transition-all flex items-center gap-1 order-4 md:order-3 cursor-pointer';
+                btn.innerHTML = '<i class="fas fa-globe text-[10px]"></i><span>公开歌曲</span>';
+            }
+        } else {
+            btn.classList.add('hidden');
+        }
+    },
+
     init() {
         // Initialization can run when the tab is clicked, or immediately.
         // Try reading global cache location to sync the selector.
         this.syncLocationSelector();
         this.resetFilters(false);
         this.bindListEvents();
+        this.syncPublicSongsBtn();
         this.fetchData();
         this.syncRemasterVisibility();
 
@@ -221,6 +252,7 @@ window.LocalMusicManager = {
             if (tabId === 'localmusic') {
                 window.LocalMusicManager.syncLocationSelector();
                 window.LocalMusicManager.resetFilters();
+                window.LocalMusicManager.syncPublicSongsBtn();
                 window.LocalMusicManager.fetchData(true); // silent fetch
             } else {
                 // Auto exit batch mode when leaving
@@ -377,10 +409,14 @@ window.LocalMusicManager = {
         }
 
         try {
-            const requestList = () => fetch('/api/music/cache/list', {
-                headers: window.getUserAuthHeaders ? window.getUserAuthHeaders() : {},
-                cache: 'no-store'
-            });
+            const requestList = () => {
+                const headers = window.getUserAuthHeaders ? window.getUserAuthHeaders() : {};
+                if (this.isViewingPublicSongs) {
+                    headers['x-user-name'] = '_open';
+                }
+                const url = `/api/music/cache/list${this.isViewingPublicSongs ? '?user=_open' : ''}`;
+                return fetch(url, { headers, cache: 'no-store' });
+            };
 
             let res = await requestList();
             if (res.status === 401 && typeof window.ensureUserAuthToken === 'function') {
@@ -682,7 +718,7 @@ window.LocalMusicManager = {
             return;
         }
 
-        const username = (window.currentListData && window.currentListData.username) || localStorage.getItem('lx_sync_user') || '_open';
+        const username = this.isViewingPublicSongs ? '_open' : ((window.currentListData && window.currentListData.username) || localStorage.getItem('lx_sync_user') || '_open');
         const page = this.getPageSlice();
         this.updatePagination();
 
@@ -886,6 +922,11 @@ window.LocalMusicManager = {
     handleCoverLoadError(index, img) {
         const item = this.displayData[index];
         if (!item) return;
+        if (item.img && typeof item.img === 'string' && /^https?:\/\//i.test(item.img) && !img.dataset.lmFallbackTried) {
+            img.dataset.lmFallbackTried = 'true';
+            img.src = item.img;
+            return;
+        }
         item.hasCover = false;
         item.coverType = 'none';
 
@@ -1034,6 +1075,15 @@ window.LocalMusicManager = {
         } else {
             if (!confirm('确定要删除此文件吗?')) return;
         }
+        // 公开歌曲库删除需要管理员权限
+        if (this.isViewingPublicSongs) {
+            if (!localStorage.getItem('lx_admin_password')) {
+                if (typeof handleAdminAuth === 'function') {
+                    const ok = await handleAdminAuth('删除公开库中的文件需要管理员权限');
+                    if (!ok) return;
+                } else { return; }
+            }
+        }
         this._executeDelete([filename]);
     },
 
@@ -1046,6 +1096,15 @@ window.LocalMusicManager = {
             if (!(await showSelect('删除本地文件', `确定要批量删除这 ${this.selectedItems.size} 个文件吗?`, { danger: true }))) return;
         } else {
             if (!confirm(`确定要删除 ${this.selectedItems.size} 个文件吗?`)) return;
+        }
+        // 公开歌曲库删除需要管理员权限
+        if (this.isViewingPublicSongs) {
+            if (!localStorage.getItem('lx_admin_password')) {
+                if (typeof handleAdminAuth === 'function') {
+                    const ok = await handleAdminAuth('批量删除公开库中的文件需要管理员权限');
+                    if (!ok) return;
+                } else { return; }
+            }
         }
         this._executeDelete(Array.from(this.selectedItems));
     },

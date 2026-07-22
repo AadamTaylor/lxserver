@@ -100,12 +100,21 @@ Search for albums and artists and favorite them with one click for quick access 
   <img src="md/singer.png" width="400" alt="Artist Display">
 </p>
 
-### 10. Subsonic Protocol Support
+### 10. Subsonic Protocol & Global Search Support
 
-Fully compatible with the Subsonic protocol, allowing you to use various Subsonic clients (e.g., Yinliu, Feishin, etc.) to connect and play music.
+Fully compatible with the Subsonic protocol, allowing you to use various Subsonic clients (e.g., Yinliu, Feishin, etc.) to connect and play music. Supports specifying platform prefixes such as `wy:`, `kg:`, `tx:`, `kw:`, `mg:`, or using `online:` / `local:` prefixes to force global online or local search within Subsonic clients.
 
 <p align="center">
-  <img src="md/subsonic.png" width="800" alt="Subsonic Support">
+  <img src="md/subsonic.png" width="400" alt="Subsonic Support">
+  <img src="md/subsonic-search.png" width="400" alt="Subsonic Online Search">
+</p>
+
+### 11. Public Library & Shared Favorites
+
+When **"Enable Public Favorites and Songs"** is enabled in the backend settings, all users (guests or different accounts) can share a common public music library and public playlists.
+
+<p align="center">
+  <img src="md/_open_song.png" width="800" alt="Public Library & Shared Favorites">
 </p>
 
 ## 🔒 Access Control & Security
@@ -244,7 +253,7 @@ Edit `config.js` directly. Environment variables take precedence:
 | `SUBSONIC_ENABLE` | `subsonic.enable` | Enable Subsonic protocol support | `true` |
 | `SUBSONIC_PATH` | `subsonic.path` | Subsonic access path | `/rest` |
 | `FRONTEND_PASSWORD` | `frontend.password` | Web dashboard password | `123456` |
-| `SERVER_NAME` | `serverName` | Sync service name | `My Sync Server` |
+| `SERVER_NAME` | `serverName` | Sync service name | `lxserver` |
 | `MAX_SNAPSHOT_NUM` | `maxSnapshotNum` | Max snapshots to keep | `10` |
 | `CONFIG_PATH` | - | Absolute path to external config file | - |
 | `DATA_PATH` | - | Absolute path to data storage directory | `./data` |
@@ -264,6 +273,7 @@ Edit `config.js` directly. Environment variables take precedence:
 | `WEBPLAYER_PASSWORD` | `player.password` | Web Player password | `123456` |
 | `DISABLE_TELEMETRY` | `disableTelemetry` | Disable anonymous telemetry and update notifications | `false` |
 | `ENABLE_PUBLIC_USER_RESTRICTION` | `user.enablePublicRestriction` | Enable public user permission restriction (restrict upload/delete public sources) | `true` |
+| `ENABLE_PUBLIC_FAVORITES` | `user.enablePublicFavorites` | Enable public favorites and songs (allows guest/public to view and play public favorites) | `false` |
 | `ENABLE_LOGIN_USER_CACHE_RESTRICTION` | `user.enableLoginCacheRestriction` | Enable cache settings restriction for logged-in non-admin users | `false` |
 | `ENABLE_CACHE_SIZE_LIMIT` | `user.enableCacheSizeLimit` | Enable cache size limit (auto-cleanup via LRU) | `false` |
 | `CACHE_SIZE_LIMIT` | `user.cacheSizeLimit` | Cache size limit in MB | `2000` |
@@ -272,6 +282,21 @@ Edit `config.js` directly. Environment variables take precedence:
 | `PROXY_ALL_ADDRESS` | `proxy.all.address` | Proxy address (supports http:// or socks5://) | - |
 | `SINGER_SOURCE_PRIORITY` | `singer.sourcePriority` | Singer info retrieval priority (e.g., `tx,wy` or `wy,tx`) | `tx,wy` |
 | `LX_USER_<username>` | `users` array | Quickly add a user, value is the password (e.g., `LX_USER_test=123`) | - |
+
+### Advanced Config Items (`config.js` Only)
+
+Some advanced options are only configurable by directly editing `config.js`:
+
+| Config Key | Description | Default |
+| --- | --- | --- |
+| `subsonic.enableDebug` | Enable Subsonic debug log mode | `true` |
+| `subsonic.onlineSearch` | Enable Subsonic online global search | `true` |
+| `subsonic.onlineSearchMode` | Subsonic online search mode (`fallback` / `merge` / `local_only`) | `"fallback"` |
+| `subsonic.onlineSearchSources` | Subsonic online search default platforms | `"wy,tx,kw,kg,mg"` |
+| `subsonic.lyricTranslation` | Include translation in Subsonic lyrics | `true` |
+| `artist.maxFetchPages` | Maximum fetch pages for artist songs | `20` |
+| `cache.namingPattern` | Cache file naming rule (`simple` / `custom`) | `"simple"` |
+| `system.allowUnsafeVM` | Allow VM mode custom source scripts (note security risks) | `false` |
 
 > **Note**: The service currently supports two types of sync connection URLs: `Root Path` (URL configuration is `ip:port`) and `User Path` (URL configuration is `ip:port/username`). If the User Path is disabled, all sync user passwords must be completely unique.
 

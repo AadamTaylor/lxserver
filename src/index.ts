@@ -225,6 +225,9 @@ if (envParams.DISABLE_TELEMETRY) {
 if (envParams.ENABLE_PUBLIC_USER_RESTRICTION) {
   global.lx.config['user.enablePublicRestriction'] = envParams.ENABLE_PUBLIC_USER_RESTRICTION === 'true'
 }
+if (envParams.ENABLE_PUBLIC_FAVORITES) {
+  global.lx.config['user.enablePublicFavorites'] = envParams.ENABLE_PUBLIC_FAVORITES === 'true'
+}
 if (envParams.ENABLE_LOGIN_USER_CACHE_RESTRICTION) {
   global.lx.config['user.enableLoginCacheRestriction'] = envParams.ENABLE_LOGIN_USER_CACHE_RESTRICTION === 'true'
 }
@@ -255,6 +258,9 @@ if (envParams.SUBSONIC_PATH !== undefined) {
 if (envParams.SINGER_SOURCE_PRIORITY !== undefined) {
   const priority = envParams.SINGER_SOURCE_PRIORITY.split(',').filter(s => s === 'tx' || s === 'wy') as Array<'tx' | 'wy'>
   if (priority.length > 0) global.lx.config['singer.sourcePriority'] = priority
+}
+if (envParams.SERVER_NAME) {
+  global.lx.config.serverName = envParams.SERVER_NAME
 }
 
 if (envUsers.length) {
@@ -464,10 +470,14 @@ if (webdavSync.isConfigured()) {
 // 导出 webdavSync 实例供 API 使用
 global.lx.webdavSync = webdavSync
 
-// [新增] 确保数据目录下的 _open 目录存在 (用于公共受限资源)
+// [新增] 确保数据目录下的 _open 及 _open/library 目录存在 (用于公共受限资源 & 公开收藏)
 const openDir = path.join(global.lx.userPath, '_open')
+const openLibDir = path.join(openDir, 'library')
 if (!fs.existsSync(openDir)) {
   fs.mkdirSync(openDir, { recursive: true })
+}
+if (!fs.existsSync(openLibDir)) {
+  fs.mkdirSync(openLibDir, { recursive: true })
 }
 
 // 启动前最后保存一次合并后的配置，确保环境变量被固化到 config.js 中

@@ -8,6 +8,7 @@ const config: LX.Config = {
   'user.enablePath': true, // 是否开启用户路径
   'user.enableRoot': false, // 是否开启根路径
   'user.enablePublicRestriction': true, // 是否启用公开用户权限限制
+  'user.enablePublicFavorites': false, // 是否开启公开收藏和歌曲
   'user.enableLoginCacheRestriction': false, // 是否启用登录用户缓存限制
   'user.enableCacheSizeLimit': false, // 是否启用缓存空间限制
   'user.cacheSizeLimit': 2000, // 缓存空间限制大小 (MB)

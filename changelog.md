@@ -26,6 +26,12 @@
   - ![Lyric Translation Switch](md/log/2.0.0-1.png)
 - **Subsonic 协议 search3 API 实现 (#213)**:
   - **search3 接口完全适配**: 实现并完善 Subsonic `search3` 标准接口，完美支持第三方客户端（如音流、Feishin、Symfonium 等）进行更丰富的搜索检索。
+- **公共音乐库与公开收藏管理 (#272)**:
+  - **公开收藏与歌曲权限控制**: 在后台设置中开启“开启公共收藏和歌曲”后，管理员可在未登录音乐账号但登录管理员的情况下对公开用户的列表进行增加删除。
+  - **只读浏览机制**: 在未登录管理员的情况下，无论未登录音乐账号或已登录音乐账号，均可以查看公开用户列表但无法编辑。
+  - ![Public Library 1](md/log/2.0.0-4.png) ![Public Library 2](md/log/2.0.0-5.png)
+  - ![Public Library 3](md/log/2.0.0-6.png) ![Public Library 4](md/log/2.0.0-7.png)
+  - ![Public Library 5](md/log/2.0.0-8.png)
 
 ### 🔧 修复与优化
 
