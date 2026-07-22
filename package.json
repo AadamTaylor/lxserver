@@ -70,7 +70,7 @@
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
     "chalk": "^4.1.2",
-    "changelog-parser": "^3.0.1",
+    "changelog-parser": "^4.1.0",
     "electron": "^42.0.0",
     "electron-builder": "^26.8.1",
     "eslint-config-love": "^47.0.0",
