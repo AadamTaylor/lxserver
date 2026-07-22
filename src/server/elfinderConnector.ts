@@ -1,7 +1,7 @@
 import * as path from 'path'
 import * as fs from 'fs'
 import * as crypto from 'crypto'
-import archiver from 'archiver'
+import { ZipArchive } from 'archiver'
 import unzipper from 'unzipper'
 
 // elFinder 文件管理器连接器
@@ -553,7 +553,7 @@ export class ElFinderConnector {
         const archivePath = path.join(dir, name)
 
         const output = fs.createWriteStream(archivePath)
-        const archive = archiver('zip', { zlib: { level: 9 } })
+        const archive = new ZipArchive({ zlib: { level: 9 } })
 
         return new Promise((resolve, reject) => {
             output.on('close', async () => {
@@ -666,7 +666,7 @@ export class ElFinderConnector {
         const zipPath = path.join(tempDir, `elfinder_zipdl_${Date.now()}_${Math.random().toString(36).substr(2)}.zip`)
 
         const output = fs.createWriteStream(zipPath)
-        const archive = archiver('zip', { zlib: { level: 1 } })
+        const archive = new ZipArchive({ zlib: { level: 1 } })
 
         return new Promise((resolve, reject) => {
             output.on('close', () => {

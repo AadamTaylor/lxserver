@@ -803,6 +803,7 @@ class DownloadManager {
 
             // 1. Resolve URL
             const requestedQuality = task.quality || (window.QualityManager ? window.QualityManager.getBestQuality(task.song, window.settings?.preferredQuality || '320k') : '320k');
+            const requestedSource = task.song?.source || '';
             task.quality = requestedQuality;
 
             const result = await downloadResolver(task.song, requestedQuality, true);
@@ -826,6 +827,9 @@ class DownloadManager {
                 songInfo: this.getSongInfoForServer(resolvedSong),
                 url: rawUrl,
                 quality: resolvedQuality,
+                requestedSource,
+                downloadSource: result.downloadSource || resolvedSong.source,
+                sourceName: result.sourceName || '',
                 enableOnlyDownloadMode: window.settings?.enableOnlyDownloadMode || false,
                 cacheLyric: window.settings?.enableServerLyricCache !== false,
                 embedLyric: !!(window.settings?.embedLyricToFile ?? true)

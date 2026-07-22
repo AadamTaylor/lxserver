@@ -27,6 +27,14 @@ function getSongQualitySize(song, quality) {
 
 const remoteQualitySizeCache = new Map();
 
+const QUALITY_SOURCE_LABELS = {
+    tx: 'TX',
+    wy: 'WY',
+    kw: 'KW',
+    kg: 'KG',
+    mg: 'MG'
+};
+
 function getSongQualityCacheKey(song, quality) {
     const meta = song?.meta || {};
     const source = song?.source || meta.source || '';
@@ -34,8 +42,15 @@ function getSongQualityCacheKey(song, quality) {
     return `${source}:${id}:${quality}`;
 }
 
-function applySongQualitySize(song, quality, size) {
-    if (!song || !quality || !size) return;
+function getSongQualityResolvedSource(song, quality) {
+    return song?._resolvedQualitySources?.[quality] || null;
+}
+
+function applySongQualityProbe(song, quality, probe) {
+    if (!song || !quality || !probe) return;
+
+    const size = probe.size || null;
+    const source = probe.source || null;
 
     // Older favorites only contain the qualities known when they were saved.
     // Always create a canonical entry so newly supported qualities can be read
@@ -46,27 +61,40 @@ function applySongQualitySize(song, quality, size) {
     if (!song._types[quality] || typeof song._types[quality] !== 'object') {
         song._types[quality] = {};
     }
-    song._types[quality].size = size;
+    if (size) song._types[quality].size = size;
+
+    if (source) {
+        if (!song._resolvedQualitySources || typeof song._resolvedQualitySources !== 'object') {
+            song._resolvedQualitySources = {};
+        }
+        song._resolvedQualitySources[quality] = source;
+    }
 
     const maps = [song._types, song._qualitys, song.meta?._types, song.meta?._qualitys];
     maps.forEach(map => {
-        if (map?.[quality]) map[quality].size = size;
+        if (!map?.[quality]) return;
+        if (size) map[quality].size = size;
+        if (source) map[quality].resolvedSource = source;
     });
 
     const lists = [song.types, song.qualitys, song.meta?.types, song.meta?.qualitys];
     lists.forEach(list => {
         if (!Array.isArray(list)) return;
         const item = list.find(t => (t?.type || t) === quality);
-        if (item && typeof item === 'object') item.size = size;
+        if (item && typeof item === 'object') {
+            if (size) item.size = size;
+            if (source) item.resolvedSource = source;
+        }
     });
 }
 
 async function fetchRemoteQualitySize(song, quality) {
-    const existingSize = getSongQualitySize(song, quality);
-    if (existingSize) return existingSize;
-
     const cacheKey = getSongQualityCacheKey(song, quality);
-    if (remoteQualitySizeCache.has(cacheKey)) return remoteQualitySizeCache.get(cacheKey);
+    if (remoteQualitySizeCache.has(cacheKey)) {
+        const cachedProbe = remoteQualitySizeCache.get(cacheKey);
+        applySongQualityProbe(song, quality, cachedProbe);
+        return cachedProbe;
+    }
 
     try {
         const authHeaders = typeof getUserAuthHeaders === 'function' ? getUserAuthHeaders() : {};
@@ -81,10 +109,16 @@ async function fetchRemoteQualitySize(song, quality) {
         if (!res.ok) throw new Error(await res.text());
 
         const data = await res.json();
-        const size = data?.size || null;
-        if (size) applySongQualitySize(song, quality, size);
-        remoteQualitySizeCache.set(cacheKey, size);
-        return size;
+        const probe = {
+            size: data?.size || null,
+            bytes: Number(data?.bytes) || 0,
+            source: data?.source || null,
+            resolvedQuality: data?.type || quality,
+            sourceName: data?.sourceName || ''
+        };
+        applySongQualityProbe(song, quality, probe);
+        remoteQualitySizeCache.set(cacheKey, probe);
+        return probe;
     } catch (e) {
         console.warn(`[QualitySize] 获取 ${quality} 真实大小失败:`, e);
         // Do not make a transient source/network failure permanent for this tab.
@@ -94,11 +128,11 @@ async function fetchRemoteQualitySize(song, quality) {
 }
 
 async function buildQualityOptionLabels(song, qualities) {
-    const missingQualities = qualities.filter(q => !getSongQualitySize(song, q));
-    if (missingQualities.length > 0) {
+    const unresolvedQualities = qualities.filter(q => !getSongQualitySize(song, q) || !getSongQualityResolvedSource(song, q));
+    if (unresolvedQualities.length > 0) {
         window.showLoading?.('正在读取音质大小...');
         try {
-            await Promise.all(missingQualities.map(q => fetchRemoteQualitySize(song, q)));
+            await Promise.all(unresolvedQualities.map(q => fetchRemoteQualitySize(song, q)));
         } finally {
             window.hideLoading?.();
         }
@@ -109,7 +143,10 @@ async function buildQualityOptionLabels(song, qualities) {
 
 function getQualityOptionLabel(song, quality) {
     const name = window.QualityManager ? window.QualityManager.getQualityDisplayName(quality) : quality;
-    return `${name} [${getSongQualitySize(song, quality) || '未知大小'}]`;
+    const size = getSongQualitySize(song, quality) || '未知大小';
+    const source = getSongQualityResolvedSource(song, quality);
+    const sourceLabel = source ? (QUALITY_SOURCE_LABELS[source] || String(source).toUpperCase()) : '';
+    return `${name} [${size}${sourceLabel ? ` · ${sourceLabel}` : ''}]`;
 }
 
 function getSelectableQualityOrder(song = null) {
