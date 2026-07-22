@@ -314,13 +314,14 @@ npm start
 
 ## 📈 Star History
 
-<a href="https://www.star-history.com/?repos=xcq0607%2Flxserver&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=xcq0607/lxserver&type=date&theme=dark&legend=top-left&sealed_token=Z2mlyexaXrM46HCiWNUO4W6uMjAiHVrtn_1s3nt7mydTkOR_TpRaPm63IstjtaIu3AZJjSzZTfq9csTxYSHxq14X9xqNDkO21ZG_D3ZF1XcGSB1M8IR0qA" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=xcq0607/lxserver&type=date&legend=top-left&sealed_token=Z2mlyexaXrM46HCiWNUO4W6uMjAiHVrtn_1s3nt7mydTkOR_TpRaPm63IstjtaIu3AZJjSzZTfq9csTxYSHxq14X9xqNDkO21ZG_D3ZF1XcGSB1M8IR0qA" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=xcq0607/lxserver&type=date&legend=top-left&sealed_token=Z2mlyexaXrM46HCiWNUO4W6uMjAiHVrtn_1s3nt7mydTkOR_TpRaPm63IstjtaIu3AZJjSzZTfq9csTxYSHxq14X9xqNDkO21ZG_D3ZF1XcGSB1M8IR0qA" />
- </picture>
+<a href="https://gitdata.xuanhun520.com/?repos=xcq0607/lxserver&type=Date">
+<picture >
+  <source media="(prefers-color-scheme: dark) and (max-width: 800px)" srcset="https://gitdata.xuanhun520.com/api/starimg?repos=xcq0607/lxserver&type=Date&theme=dark" />
+  <source  media="(prefers-color-scheme: light) and (max-width: 800px)" srcset="https://gitdata.xuanhun520.com/api/starimg?repos=xcq0607/lxserver&type=Date&theme=light" />
+  <img style="width: 800px; height: 533px;" alt="Star History Chart" src="https://gitdata.xuanhun520.com/api/starimg?repos=xcq0607/lxserver&type=Date&theme=dark" />
+</picture>
 </a>
+
 
 
 ## 📄 开源协议
