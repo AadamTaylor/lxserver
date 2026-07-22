@@ -4092,7 +4092,9 @@ async function playSong(song, index, forceQuality = null, noPlay = false, isRetr
 
     currentPlayingSong = song;
     window.currentPlayingSong = song; // expose for lyric-card.js
-    updatePlayerInfo(song);
+    // The advertised quality is not necessarily the quality that will be played.
+    // Clear the previous song's quality until URL resolution confirms the actual one.
+    updatePlayerInfo(song, null);
     updateMediaSessionMetadata(song);
     // 异步触发歌词抓取，初步尝试（此时音质可能尚未最终确定，但在 playSong 后续逻辑中会再次同步）
     fetchLyric(song);
@@ -4214,10 +4216,11 @@ async function playSong(song, index, forceQuality = null, noPlay = false, isRetr
             currentPlayingSong = playbackSong;
             window.currentPlayingSong = playbackSong;
             if (currentRecoveryState) currentRecoveryState.currentSong = playbackSong;
-            updatePlayerInfo(playbackSong);
             updateMediaSessionMetadata(playbackSong);
             fetchLyric(playbackSong, currentQuality);
         }
+        // Always refresh the bottom-player badge, including cache hits that keep the same song object.
+        updatePlayerInfo(playbackSong, currentQuality);
 
         // [Sync] 确定了最终播放音质后，直接以正确音质重写服务器端歌词缓存文件名
         // 注意：不能再调用 fetchLyric(song)，因为歌词已就绪时 fetchLyric 会提前返回，
@@ -4558,7 +4561,7 @@ window.setImg = (id, src) => {
     }
 };
 
-function updatePlayerInfo(song) {
+function updatePlayerInfo(song, actualQuality) {
     // Bottom Player - 更新标题
     const titleEl = document.getElementById('player-title');
     if (titleEl) {
@@ -4579,7 +4582,12 @@ function updatePlayerInfo(song) {
     const sourceEl = document.getElementById('player-source');
     if (sourceEl) {
         if (song.source) {
-            const qualityTags = getQualityTags(song);
+            // Without an explicitly resolved quality, only show the source.
+            // This prevents the player's badge from claiming a higher advertised quality.
+            const resolvedQuality = actualQuality === undefined
+                ? (song === currentPlayingSong ? currentQuality : null)
+                : actualQuality;
+            const qualityTags = resolvedQuality ? getQualityTags({ quality: resolvedQuality }) : '';
             sourceEl.innerHTML = getSourceTag(song.source) + qualityTags;
             sourceEl.classList.remove('hidden');
         } else {
@@ -4980,6 +4988,7 @@ function savePlaybackState() {
             // 限制长度为 300 首以兼顾性能和容量（通常足够临时列表使用）
             playlist: currentPlaylist ? currentPlaylist.slice(0, 300) : null,
             playMode: playMode,
+            quality: currentQuality,
             timestamp: Date.now()
         };
         localStorage.setItem('lx_playback_state', JSON.stringify(state));
@@ -5025,9 +5034,10 @@ async function restorePlaybackState() {
         currentIndex = state.index >= 0 ? state.index : 0;
         currentPlayingSong = state.song;
         window.currentPlayingSong = state.song;
+        currentQuality = state.quality || null;
 
         // 3. 更新 UI (静默更新)
-        updatePlayerInfo(state.song);
+        updatePlayerInfo(state.song, currentQuality);
         updateMediaSessionMetadata(state.song);
         renderQueue(); // 提前渲染队列 UI
 
@@ -7459,8 +7469,8 @@ const originalPlaySong = window.playSong;
 // Actually `updatePlayerInfo` is perfect.
 
 const _originalUpdatePlayerInfo = updatePlayerInfo;
-updatePlayerInfo = function (song) {
-    _originalUpdatePlayerInfo(song);
+updatePlayerInfo = function (song, actualQuality) {
+    _originalUpdatePlayerInfo(song, actualQuality);
     // Detail View update
     updateDetailInfo(song);
     // fetchLyric(song); // [Moved] 移至 playSong 中精确控制时机
