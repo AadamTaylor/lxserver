@@ -1255,6 +1255,11 @@
                                 <div class="h-4 w-[1px] bg-emerald-200 dark:bg-emerald-800 mx-1 shrink-0"></div>
                                 <!-- 功能操作组 -->
                                 <div class="flex items-center gap-1 shrink-0">
+                                    <button onclick="window.LocalMusicManager.batchAddToPlaylist()"
+                                        class="text-[11px] md:text-xs px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg shadow-sm transition-all font-medium whitespace-nowrap flex items-center gap-1.5"
+                                        title="将选中的本地歌曲加入歌单">
+                                        <i class="fas fa-folder-plus"></i>加入歌单
+                                    </button>
                                     <button onclick="window.LocalMusicManager.batchFetchLyrics()"
                                         class="text-[11px] md:text-xs px-2.5 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded-lg shadow-sm transition-all font-medium whitespace-nowrap flex items-center gap-1.5">
                                         <i class="fas fa-closed-captioning"></i>补全歌词

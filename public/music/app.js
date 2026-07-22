@@ -8896,6 +8896,7 @@ function renderMyLists(data) {
     // Helper to create list item
     const createItem = (listObj, name, icon, count) => {
         const id = typeof listObj === 'string' ? listObj : listObj.id;
+        const displayName = String(name || '未命名歌单');
         const div = document.createElement('div');
         div.className = "px-6 py-2 text-sm t-text-muted hover:t-bg-main cursor-pointer flex items-center group transition-colors overflow-hidden";
         div.setAttribute('data-sidebar-list-id', id);
@@ -8903,7 +8904,9 @@ function renderMyLists(data) {
         div.onclick = () => handleListClick(id);
 
         // Use createMarqueeHtml for list name
-        const nameHtml = name.length > 8 ? createMarqueeHtml(name, 'flex-1') : `<span class="ml-2 flex-1 truncate">${name}</span>`;
+        const nameHtml = displayName.length > 8
+            ? createMarqueeHtml(displayName, 'flex-1')
+            : `<span class="ml-2 flex-1 truncate">${escapeHtmlText(displayName)}</span>`;
 
         // Buttons logic (for collected external playlists)
         const showExternalOps = listObj && listObj.sourceListId && listObj.source;
@@ -8929,8 +8932,9 @@ function renderMyLists(data) {
             </span>
             ${opsHtml}
             <i class="fas ${icon} w-5 t-text-muted group-hover:text-emerald-500 transition-colors flex-shrink-0"></i>
-            ${name.length > 8 ? `<div class="ml-2 flex-1 overflow-hidden">${nameHtml}</div>` : nameHtml}
+            ${displayName.length > 8 ? `<div class="ml-2 flex-1 overflow-hidden">${nameHtml}</div>` : nameHtml}
             <span class="text-xs text-gray-300 group-hover:t-text-muted mr-2 flex-shrink-0">${count}</span>
+            ${typeof listObj !== 'string' ? `<button type="button" class="text-gray-300 hover:text-emerald-500 flex-shrink-0 mr-2 transition-colors" title="重命名歌单" aria-label="重命名歌单" onclick="handleRenameList('${id}', event)"><i class="fas fa-pen text-[10px]"></i></button>` : ''}
             ${id !== 'default' && id !== 'love' ? `<i class="fas fa-trash text-gray-300 hover:text-red-500 hidden group-hover:block flex-shrink-0" onclick="handleRemoveList('${id}', event)"></i>` : ''}
         `;
         return div;
@@ -9131,6 +9135,42 @@ async function handleCreateList() {
             showError('创建失败，请重试');
         }
     }
+}
+
+async function handleRenameList(listId, event) {
+    if (event) event.stopPropagation();
+    if (!currentListData?.userList) return;
+
+    const list = currentListData.userList.find(item => item.id === listId);
+    if (!list) {
+        showError('未找到要重命名的歌单');
+        return;
+    }
+
+    const input = await showInput('重命名歌单', '请输入新的歌单名称：', {
+        placeholder: '歌单名称',
+        defaultValue: list.name || ''
+    });
+    if (input === null || input === undefined) return;
+
+    const nextName = String(input).trim();
+    if (!nextName) {
+        showError('歌单名称不能为空');
+        return;
+    }
+    if (nextName === list.name) return;
+
+    list.name = nextName;
+    await pushDataChange();
+    renderMyLists(currentListData);
+
+    if (typeof renderPlaylistAddGrid === 'function' && !document.getElementById('playlist-add-modal')?.classList.contains('hidden')) {
+        renderPlaylistAddGrid();
+    }
+    if (window.currentSearchScope === 'local_list' && window.currentViewingListId === listId) {
+        handleListClick(listId, true);
+    }
+    showSuccess('歌单名称已更新');
 }
 
 function formatSongToLxMusicStandard(item) {
@@ -9595,6 +9635,7 @@ async function refreshUserListData() {
 window.refreshUserListData = refreshUserListData;
 window.handleRemoteConnect = handleRemoteConnect;
 window.handleCreateList = handleCreateList;
+window.handleRenameList = handleRenameList;
 window.handleRefreshList = handleRefreshList;
 window.handleRemoveList = handleRemoveList;
 window.toggleFavorites = toggleFavorites;

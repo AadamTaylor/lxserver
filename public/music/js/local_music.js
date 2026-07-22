@@ -61,6 +61,148 @@ window.LocalMusicManager = {
         return this.escapeHtml(value);
     },
 
+    tokenizeSearchExpression(expression) {
+        const tokens = [];
+        let buffer = '';
+        let quote = '';
+        let escaped = false;
+        const operatorTypes = {
+            '&': 'and',
+            '|': 'or',
+            '!': 'not',
+            '(': 'leftParen',
+            ')': 'rightParen',
+        };
+        const flushTerm = () => {
+            const value = buffer.trim();
+            if (value) tokens.push({ type: 'term', value });
+            buffer = '';
+        };
+
+        for (const char of String(expression || '')) {
+            if (quote) {
+                if (escaped) {
+                    buffer += char;
+                    escaped = false;
+                } else if (char === '\\') {
+                    escaped = true;
+                } else if (char === quote) {
+                    quote = '';
+                } else {
+                    buffer += char;
+                }
+                continue;
+            }
+
+            if (char === '"' || char === "'") {
+                quote = char;
+                continue;
+            }
+
+            const operatorType = operatorTypes[char];
+            if (operatorType) {
+                flushTerm();
+                tokens.push({ type: operatorType });
+            } else {
+                buffer += char;
+            }
+        }
+
+        if (quote) return null;
+        if (escaped) buffer += '\\';
+        flushTerm();
+        return tokens;
+    },
+
+    parseSearchExpression(expression) {
+        const tokens = this.tokenizeSearchExpression(expression);
+        if (!tokens || !tokens.length) return null;
+        let position = 0;
+
+        const parsePrimary = () => {
+            const token = tokens[position];
+            if (!token) return null;
+            if (token.type === 'term') {
+                position += 1;
+                return { type: 'term', value: token.value };
+            }
+            if (token.type !== 'leftParen') return null;
+            position += 1;
+            const node = parseOr();
+            if (!node || tokens[position]?.type !== 'rightParen') return null;
+            position += 1;
+            return node;
+        };
+
+        const parseNot = () => {
+            if (tokens[position]?.type !== 'not') return parsePrimary();
+            position += 1;
+            const child = parseNot();
+            return child ? { type: 'not', child } : null;
+        };
+
+        const parseAnd = () => {
+            let node = parseNot();
+            if (!node) return null;
+            while (tokens[position]?.type === 'and') {
+                position += 1;
+                const right = parseNot();
+                if (!right) return null;
+                node = { type: 'and', left: node, right };
+            }
+            return node;
+        };
+
+        const parseOr = () => {
+            let node = parseAnd();
+            if (!node) return null;
+            while (tokens[position]?.type === 'or') {
+                position += 1;
+                const right = parseAnd();
+                if (!right) return null;
+                node = { type: 'or', left: node, right };
+            }
+            return node;
+        };
+
+        const root = parseOr();
+        return root && position === tokens.length ? root : null;
+    },
+
+    createSearchMatcher(expression) {
+        const normalizedExpression = String(expression || '').trim().toLowerCase();
+        if (!normalizedExpression) return () => true;
+        const tree = this.parseSearchExpression(normalizedExpression);
+        const fallbackTerm = normalizedExpression;
+
+        const evaluate = (node, values) => {
+            if (!node) return values.some(value => value.includes(fallbackTerm));
+            switch (node.type) {
+                case 'term':
+                    return values.some(value => value.includes(node.value));
+                case 'not':
+                    return !evaluate(node.child, values);
+                case 'and':
+                    return evaluate(node.left, values) && evaluate(node.right, values);
+                case 'or':
+                    return evaluate(node.left, values) || evaluate(node.right, values);
+                default:
+                    return false;
+            }
+        };
+
+        return rawValues => {
+            const values = rawValues.map(value => String(value || '').toLowerCase());
+            return evaluate(tree, values);
+        };
+    },
+
+    getSearchValues(item, includeQuality = false) {
+        const values = [item.name, item.singer, item.album, item.filename];
+        if (includeQuality) values.push(item.quality);
+        return values;
+    },
+
     getItemKey(item) {
         return `${item.folder}\u0000${item.filename}`;
     },
@@ -467,6 +609,9 @@ window.LocalMusicManager = {
         // [New] Save to localStorage
         this.saveFilters();
 
+        const searchMatcher = this.createSearchMatcher(this.searchKeyword);
+        const quickSearchMatcher = this.createSearchMatcher(this.quickSearchKeyword);
+
         // 3. Apply Filters（多选 Set，空集合表示不限制；Folder 为单选）
         current = current.filter(item => {
             // Folder check（单选）
@@ -501,20 +646,9 @@ window.LocalMusicManager = {
                 if (!matched) return false;
             }
 
-            // Keyword search (Complex)
-            const k = this.searchKeyword;
-            const qk = this.quickSearchKeyword;
-
-            const matchKeywords = (keyword) => {
-                if (!keyword) return true;
-                return (item.name || '').toLowerCase().includes(keyword) ||
-                    (item.singer || '').toLowerCase().includes(keyword) ||
-                    (item.album || '').toLowerCase().includes(keyword) ||
-                    (item.filename || '').toLowerCase().includes(keyword);
-            };
-
-            if (!matchKeywords(k)) return false;
-            if (qk && !matchKeywords(qk)) return false;
+            const searchValues = this.getSearchValues(item);
+            if (!searchMatcher(searchValues)) return false;
+            if (!quickSearchMatcher(searchValues)) return false;
 
             // SubPath check
             if (this.selectedSubPath !== '') {
@@ -1002,6 +1136,53 @@ window.LocalMusicManager = {
     updateBatchUI() {
         const span = document.getElementById('lm-batch-selected-count');
         if (span) span.textContent = this.selectedItems.size;
+    },
+
+    buildPlaylistSong(item) {
+        const songInfo = item?.songInfo || {};
+        const quality = item?.quality || songInfo.quality || songInfo.type || '128k';
+        let types = songInfo.types;
+
+        if (Array.isArray(types)) {
+            types = types.map(type => typeof type === 'object' ? { ...type } : type);
+            if (!types.some(type => (type?.type || type) === quality)) {
+                types.push({ type: quality, size: item?.size || 0 });
+            }
+        } else {
+            types = { ...(types || {}) };
+            if (!types[quality]) types[quality] = { size: item?.size || 0 };
+        }
+
+        return {
+            ...songInfo,
+            id: item.id || songInfo.id,
+            songmid: item.songmid || songInfo.songmid || item.id || songInfo.id,
+            name: item.name || songInfo.name,
+            singer: item.singer || songInfo.singer,
+            source: item.source || songInfo.source,
+            albumName: item.album || songInfo.albumName || '',
+            albumId: item.albumId || songInfo.albumId,
+            img: item.img || songInfo.img,
+            interval: item.interval || songInfo.interval,
+            quality,
+            type: quality,
+            types
+        };
+    },
+
+    batchAddToPlaylist() {
+        const targets = this.getSelectedEntries();
+        if (targets.length === 0) {
+            if (typeof showInfo === 'function') showInfo('请先选择要加入歌单的歌曲');
+            return;
+        }
+
+        if (typeof window.openPlaylistAddModal !== 'function') {
+            if (typeof showError === 'function') showError('歌单组件尚未加载完成');
+            return;
+        }
+
+        window.openPlaylistAddModal(targets.map(item => this.buildPlaylistSong(item)));
     },
 
     playItem(index) {
@@ -2084,8 +2265,8 @@ window.LocalMusicManager = {
         const keyword = this.remasterSearchKeyword;
         const items = this.getRemasterSelectableItems();
         if (!keyword) return items;
-        return items.filter(item => [item.name, item.singer, item.album, item.filename, item.quality]
-            .some(value => String(value || '').toLowerCase().includes(keyword)));
+        const searchMatcher = this.createSearchMatcher(keyword);
+        return items.filter(item => searchMatcher(this.getSearchValues(item, true)));
     },
 
     pruneRemasterSelection() {
