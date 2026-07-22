@@ -8,6 +8,7 @@ const config: LX.Config = {
   'user.enablePath': true, // 是否开启用户路径
   'user.enableRoot': false, // 是否开启根路径
   'user.enablePublicRestriction': true, // 是否启用公开用户权限限制
+  'user.enablePublicFavorites': false, // 是否开启公开收藏和歌曲
   'user.enableLoginCacheRestriction': false, // 是否启用登录用户缓存限制
   'user.enableCacheSizeLimit': false, // 是否启用缓存空间限制
   'user.cacheSizeLimit': 2000, // 缓存空间限制大小 (MB)
@@ -29,10 +30,14 @@ const config: LX.Config = {
   'frontend.password': '123456',
 
   // WebDAV 配置
+  'webdav.enable': false,
   'webdav.url': '',
   'webdav.username': '',
   'webdav.password': '',
+  'webdav.syncPath': '/lx-sync', // 增量同步远程路径
+  'webdav.backupPath': '/lx-sync-backups', // 全量备份远程路径
   'sync.interval': 60, // 同步间隔（分钟）默认1小时
+  'sync.backupInterval': 24, // 全量备份间隔（小时）默认24小时
 
   // Web播放器配置
   'player.enableAuth': false,
@@ -47,6 +52,11 @@ const config: LX.Config = {
   'player.path': '/music', // 播放器路径
   'subsonic.enable': true, // 是否启用 Subsonic 服务
   'subsonic.path': '/rest', // Subsonic 访问路径
+  'subsonic.enableDebug': true, // 是否开启 Subsonic 调试日志模式
+  'subsonic.onlineSearch': true, // 是否开启 Subsonic 在线全网搜索
+  'subsonic.onlineSearchMode': 'fallback', // 在线搜索模式: fallback | merge | local_only
+  'subsonic.onlineSearchSources': 'wy,tx,kw,kg,mg', // 在线搜索默认平台
+  'subsonic.lyricTranslation': true, // 是否在 Subsonic 歌词中包含翻译
   'singer.sourcePriority': ['tx', 'wy'], // 歌手信息源优先级
   'artist.maxFetchPages': 20, // 歌手歌曲最大抓取页数
   'cache.namingPattern': 'simple', // 缓存命名规则

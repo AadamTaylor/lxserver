@@ -73,6 +73,11 @@ declare namespace LX {
     'user.enablePublicRestriction'?: boolean
 
     /**
+     * 是否开启公开收藏和歌曲
+     */
+    'user.enablePublicFavorites'?: boolean
+
+    /**
      * 是否启用登录用户缓存限制
      */
     'user.enableLoginCacheRestriction'?: boolean
@@ -106,6 +111,11 @@ declare namespace LX {
     'frontend.password'?: string
 
     /**
+     * 是否启用 WebDAV 同步服务
+     */
+    'webdav.enable'?: boolean
+
+    /**
      * WebDAV URL
      */
     'webdav.url'?: string
@@ -121,9 +131,24 @@ declare namespace LX {
     'webdav.password'?: string
 
     /**
+     * WebDAV 增量同步远端路径（默认 /lx-sync）
+     */
+    'webdav.syncPath'?: string
+
+    /**
+     * WebDAV 全量备份远端路径（默认 /lx-sync-backups）
+     */
+    'webdav.backupPath'?: string
+
+    /**
      * 同步间隔(分钟)
      */
     'sync.interval'?: number
+
+    /**
+     * 全量备份间隔(小时)，默认 24
+     */
+    'sync.backupInterval'?: number
 
     /**
      * 是否开启Web播放器访问密码
@@ -169,6 +194,31 @@ declare namespace LX {
      * Subsonic 访问路径 (默认 /rest)
      */
     'subsonic.path'?: string
+
+    /**
+     * 是否开启 Subsonic 调试日志模式 (默认 false/true)
+     */
+    'subsonic.enableDebug'?: boolean
+
+    /**
+     * 是否启用 Subsonic 在线全网搜索
+     */
+    'subsonic.onlineSearch'?: boolean
+
+    /**
+     * Subsonic 在线搜索模式 (fallback | merge | local_only)
+     */
+    'subsonic.onlineSearchMode'?: 'fallback' | 'merge' | 'local_only'
+
+    /**
+     * Subsonic 在线搜索默认平台 (如 wy,tx,kw,kg,mg)
+     */
+    'subsonic.onlineSearchSources'?: string
+
+    /**
+     * Subsonic 歌词是否包含翻译 (默认 true)
+     */
+    'subsonic.lyricTranslation'?: boolean
 
     /**
      * 歌手信息源优先级

@@ -53,10 +53,11 @@ type LyricFetcher = (songInfo: any) => Promise<string | null>
 let _lyricFetcher: LyricFetcher | null = null
 export const setLyricFetcher = (fn: LyricFetcher) => { _lyricFetcher = fn }
 
-export const getCacheDir = (username?: string, isOnlyDownload?: boolean) => {
+export const getCacheDir = (username?: string, isOnlyDownload?: boolean, location?: string) => {
     const folderName = isOnlyDownload ? 'music' : 'cache'
+    const loc = location || currentCacheLocation
     let baseDir = ''
-    if (currentCacheLocation === CACHE_ROOTS.DATA) {
+    if (loc === CACHE_ROOTS.DATA) {
         baseDir = path.join(global.lx.dataPath, folderName)
     } else {
         baseDir = path.join(process.cwd(), folderName)
@@ -73,7 +74,7 @@ export const getCacheDir = (username?: string, isOnlyDownload?: boolean) => {
 }
 
 export const getCoverCacheDir = (username: string) => {
-    const baseDir = path.join(global.lx.dataPath, 'cover_cache')
+    const baseDir = path.join(process.cwd(), 'cover_cache')
     const userDirName = (username && username !== '_open' && username !== 'default') ? username : '_open'
     const fullPath = path.join(baseDir, userDirName)
     if (!fs.existsSync(fullPath)) {
@@ -269,7 +270,7 @@ const getCoverCachePaths = (filename: string, username: string, stats?: Stats) =
 const getLegacyCoverCachePaths = (filename: string, username: string, stats?: Stats) => {
     const hash = getCoverCacheHash(filename, stats)
     const userDirName = (username && username !== '_open' && username !== 'default') ? username : '_open'
-    const coverCacheDir = path.join(process.cwd(), 'cover_cache', userDirName)
+    const coverCacheDir = path.join(global.lx.dataPath, 'cover_cache', userDirName)
     return {
         binPath: path.join(coverCacheDir, `${hash}.bin`),
         mimePath: path.join(coverCacheDir, `${hash}.mime`),
@@ -859,7 +860,7 @@ export const syncCacheIndex = async (username?: string, roots: Array<'cache' | '
                         sampleRate = tagger.sampleRate
                         bitDepth = tagger.bitDepth
                         finalQuality = detectQualityFromBitrate(tagger.bitRate, ext, tagger)
-                        
+
                         // [新增] 检测是否已嵌入歌词 USLT 标签
                         const lyricsInTag = tagger.lyrics
                         hasEmbedLyric = !!(lyricsInTag && lyricsInTag.trim().length > 10)
@@ -1315,9 +1316,9 @@ const downloadCoverImage = async (imageUrl: string, redirects = 0): Promise<{ da
     })
 }
 
-const setIndexCoverState = (filename: string, username: string, coverType: CacheItem['coverType'], stats?: Stats) => {
+const setIndexCoverState = (filename: string, username: string, coverType: CacheItem['coverType'], stats?: Stats, location?: string) => {
     for (const folder of ['cache', 'music'] as const) {
-        const item = indexManager.getAll(username, folder).find(candidate => candidate.filename === filename)
+        const item = indexManager.getAll(username, folder, location).find(candidate => candidate.filename === filename)
         if (!item) continue
         item.coverType = coverType
         item.hasCover = coverType !== 'none'
@@ -1326,7 +1327,7 @@ const setIndexCoverState = (filename: string, username: string, coverType: Cache
             item.coverCheckedMtime = stats.mtimeMs
             item.coverCheckedSize = stats.size
         }
-        indexManager.save(username, folder)
+        indexManager.save(username, folder, location)
         return item
     }
     return null
@@ -1338,54 +1339,61 @@ const setIndexCoverState = (filename: string, username: string, coverType: Cache
 export const getCacheCover = async (filename: string, username?: string) => {
     const normalizedUsername = (username && username !== '_open' && username !== 'default') ? username : '_open'
 
+    const locations = [
+        currentCacheLocation,
+        currentCacheLocation === CACHE_ROOTS.DATA ? CACHE_ROOTS.ROOT : CACHE_ROOTS.DATA
+    ]
     const roots: Array<'cache' | 'music'> = ['cache', 'music']
-    for (const folder of roots) {
-        const dir = getCacheDir(normalizedUsername, folder === 'music')
-        const filePath = resolveCacheRelativePath(dir, filename) // [Fix] Allow subfolders safely
 
-        if (filePath && fs.existsSync(filePath)) {
-            let stats: Stats | undefined
-            try {
-                stats = fs.statSync(filePath)
-                const cachedCover = readCoverCache(filename, normalizedUsername, stats)
-                if (cachedCover) {
-                    setIndexCoverState(filename, normalizedUsername, 'cached', stats)
-                    return cachedCover
+    for (const loc of locations) {
+        for (const folder of roots) {
+            const dir = getCacheDir(normalizedUsername, folder === 'music', loc)
+            const filePath = resolveCacheRelativePath(dir, filename) // [Fix] Allow subfolders safely
+
+            if (filePath && fs.existsSync(filePath)) {
+                let stats: Stats | undefined
+                try {
+                    stats = fs.statSync(filePath)
+                    const cachedCover = readCoverCache(filename, normalizedUsername, stats)
+                    if (cachedCover) {
+                        setIndexCoverState(filename, normalizedUsername, 'cached', stats, loc)
+                        return cachedCover
+                    }
+                } catch (e) {
+                    console.error(`[Cache] Error reading cover cache for: ${filename}`, e)
                 }
-            } catch (e) {
-                console.error(`[Cache] Error reading cover cache for: ${filename}`, e)
-            }
 
-            let tagger: any
-            try {
-                tagger = new MusicTagger()
-                tagger.loadPath(filePath)
-                const pics = tagger.pictures
-                const pic = Array.isArray(pics) ? pics.find(hasValidPictureData) : null
-                if (pic) {
-                    const mime = pic.mimeType || 'image/jpeg'
-                    const data = Buffer.from(pic.data)
-                    writeCoverCache(filename, normalizedUsername, data, mime, stats)
-                    setIndexCoverState(filename, normalizedUsername, 'embedded', stats)
-                    return { data, mime: detectImageMime(data) || mime }
+                let tagger: any
+                try {
+                    tagger = new MusicTagger()
+                    tagger.loadPath(filePath)
+                    const pics = tagger.pictures
+                    const pic = Array.isArray(pics) ? pics.find(hasValidPictureData) : null
+                    if (pic) {
+                        const mime = pic.mimeType || 'image/jpeg'
+                        const data = Buffer.from(pic.data)
+                        writeCoverCache(filename, normalizedUsername, data, mime, stats)
+                        setIndexCoverState(filename, normalizedUsername, 'embedded', stats, loc)
+                        return { data, mime: detectImageMime(data) || mime }
+                    }
+                } catch (e) {
+                    // console.error(`[Cache] Error reading tags for cover: ${filename}`, e)
+                } finally {
+                    try { if (tagger) tagger.dispose() } catch (e) { }
                 }
-            } catch (e) {
-                // console.error(`[Cache] Error reading tags for cover: ${filename}`, e)
-            } finally {
-                try { if (tagger) tagger.dispose() } catch (e) { }
-            }
 
-            const item = [...indexManager.getAll(normalizedUsername, 'cache'), ...indexManager.getAll(normalizedUsername, 'music')]
-                .find(candidate => candidate.filename === filename)
-            if (item && hasUsableRemoteCover(item.img)) {
-                const remoteCover = await downloadCoverImage(item.img!)
-                if (remoteCover && writeCoverCache(filename, normalizedUsername, remoteCover.data, remoteCover.mime, stats)) {
-                    setIndexCoverState(filename, normalizedUsername, 'cached', stats)
-                    return remoteCover
+                const item = [...indexManager.getAll(normalizedUsername, 'cache', loc), ...indexManager.getAll(normalizedUsername, 'music', loc)]
+                    .find(candidate => candidate.filename === filename)
+                if (item && hasUsableRemoteCover(item.img)) {
+                    const remoteCover = await downloadCoverImage(item.img!)
+                    if (remoteCover && writeCoverCache(filename, normalizedUsername, remoteCover.data, remoteCover.mime, stats)) {
+                        setIndexCoverState(filename, normalizedUsername, 'cached', stats, loc)
+                        return remoteCover
+                    }
                 }
-            }
 
-            setIndexCoverState(filename, normalizedUsername, 'none', stats)
+                setIndexCoverState(filename, normalizedUsername, 'none', stats, loc)
+            }
         }
     }
     return null
@@ -2440,13 +2448,20 @@ export const setIndexEmbedLyric = (
 }
 
 export const serveCacheFile = (req: http.IncomingMessage, res: http.ServerResponse, filename: string, username?: string) => {
+    const locations = [
+        currentCacheLocation,
+        currentCacheLocation === CACHE_ROOTS.DATA ? CACHE_ROOTS.ROOT : CACHE_ROOTS.DATA
+    ]
     const roots = ['cache', 'music']
     let filePath = ''
     const normalizedUsername = (username && username !== '_open' && username !== 'default') ? username : '_open'
-    for (const folder of roots) {
-        const dir = getCacheDir(normalizedUsername, folder === 'music')
-        const checkPath = path.join(dir, filename) // [Fix] Allow subfolders
-        if (fs.existsSync(checkPath)) { filePath = checkPath; break }
+    for (const loc of locations) {
+        for (const folder of roots) {
+            const dir = getCacheDir(normalizedUsername, folder === 'music', loc)
+            const checkPath = path.join(dir, filename) // [Fix] Allow subfolders
+            if (fs.existsSync(checkPath)) { filePath = checkPath; break }
+        }
+        if (filePath) break
     }
     if (!filePath) { res.writeHead(404); res.end('Not Found'); return }
     const stat = fs.statSync(filePath)
@@ -2691,19 +2706,19 @@ export const switchFolder = async (filenames: string[], username: string | undef
             console.error(`[FileCache] Failed to move ${filename}:`, errMsg)
             failCount++
         }
-        }
-
-        return { successCount, failCount }
     }
 
-    export const switchBaseLocation = async (filenames: string[], username: string | undefined) => {
-        const normalizedUsername = (username && username !== '_open' && username !== 'default') ? username : '_open'
-        let successCount = 0
-        let failCount = 0
-        const sourceLoc = currentCacheLocation
-        const targetLoc = sourceLoc === CACHE_ROOTS.DATA ? CACHE_ROOTS.ROOT : CACHE_ROOTS.DATA
+    return { successCount, failCount }
+}
 
-        const folders: Array<'cache' | 'music'> = ['cache', 'music']
+export const switchBaseLocation = async (filenames: string[], username: string | undefined) => {
+    const normalizedUsername = (username && username !== '_open' && username !== 'default') ? username : '_open'
+    let successCount = 0
+    let failCount = 0
+    const sourceLoc = currentCacheLocation
+    const targetLoc = sourceLoc === CACHE_ROOTS.DATA ? CACHE_ROOTS.ROOT : CACHE_ROOTS.DATA
+
+    const folders: Array<'cache' | 'music'> = ['cache', 'music']
 
     // Helper to get dir for a specific location
     const getLocalDir = (folder: string, loc: string) => {
@@ -2861,7 +2876,7 @@ export const categorizeFiles = async (filenames: string[], targetSubPath: string
 
         try {
             // Physically move file
-                if (fs.existsSync(oldPath)) {
+            if (fs.existsSync(oldPath)) {
                 safeRenameSync(oldPath, newPath)
 
                 // Move lyrics if exist

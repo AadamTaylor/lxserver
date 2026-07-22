@@ -2,6 +2,7 @@
 
 import fs from 'fs'
 import path from 'path'
+import crypto from 'crypto'
 import moduleAlias from 'module-alias'
 // @ts-ignore
 moduleAlias.addAliases({
@@ -60,12 +61,24 @@ const envParamKeys = Object.values(ENV_PARAMS).filter(v => v != 'LX_USER_')
   if (envLog.length) console.log(`Load env: \n  ${envLog.join('\n  ')}`)
 }
 
+let lastConfigHash = ''
+const getConfigHash = (filePath: string) => {
+  try {
+    if (!fs.existsSync(filePath)) return ''
+    const content = fs.readFileSync(filePath)
+    return crypto.createHash('md5').update(content).digest('hex')
+  } catch {
+    return ''
+  }
+}
+
 const dataPath = envParams.DATA_PATH ?? path.join(__dirname, '../data')
 const saveConfigToFile = () => {
   const configPath = process.env.CONFIG_PATH || path.join(process.cwd(), 'config.js')
   const content = `module.exports = ${JSON.stringify(global.lx.config, null, 2)}`
   try {
     fs.writeFileSync(configPath, content)
+    lastConfigHash = crypto.createHash('md5').update(content).digest('hex')
     // console.log('Current memory config saved to config.js')
   } catch (err) {
     console.error('Failed to save config.js:', err)
@@ -161,6 +174,9 @@ if (envParams.LIST_ADD_MUSIC_LOCATION_TYPE) {
 if (envParams.FRONTEND_PASSWORD) {
   global.lx.config['frontend.password'] = envParams.FRONTEND_PASSWORD
 }
+if (envParams.WEBDAV_ENABLE) {
+  global.lx.config['webdav.enable'] = envParams.WEBDAV_ENABLE === 'true'
+}
 if (envParams.WEBDAV_URL) {
   global.lx.config['webdav.url'] = envParams.WEBDAV_URL
 }
@@ -170,9 +186,19 @@ if (envParams.WEBDAV_USERNAME) {
 if (envParams.WEBDAV_PASSWORD) {
   global.lx.config['webdav.password'] = envParams.WEBDAV_PASSWORD
 }
+if (envParams.WEBDAV_SYNC_PATH) {
+  global.lx.config['webdav.syncPath'] = envParams.WEBDAV_SYNC_PATH
+}
+if (envParams.WEBDAV_BACKUP_PATH) {
+  global.lx.config['webdav.backupPath'] = envParams.WEBDAV_BACKUP_PATH
+}
 if (envParams.SYNC_INTERVAL) {
   const interval = parseInt(envParams.SYNC_INTERVAL)
   if (!isNaN(interval)) global.lx.config['sync.interval'] = interval
+}
+if (envParams.BACKUP_INTERVAL) {
+  const backupInterval = parseInt(envParams.BACKUP_INTERVAL)
+  if (!isNaN(backupInterval)) global.lx.config['sync.backupInterval'] = backupInterval
 }
 if (envParams.USER_ENABLE_PATH) {
   global.lx.config['user.enablePath'] = envParams.USER_ENABLE_PATH === 'true'
@@ -198,6 +224,9 @@ if (envParams.DISABLE_TELEMETRY) {
 }
 if (envParams.ENABLE_PUBLIC_USER_RESTRICTION) {
   global.lx.config['user.enablePublicRestriction'] = envParams.ENABLE_PUBLIC_USER_RESTRICTION === 'true'
+}
+if (envParams.ENABLE_PUBLIC_FAVORITES) {
+  global.lx.config['user.enablePublicFavorites'] = envParams.ENABLE_PUBLIC_FAVORITES === 'true'
 }
 if (envParams.ENABLE_LOGIN_USER_CACHE_RESTRICTION) {
   global.lx.config['user.enableLoginCacheRestriction'] = envParams.ENABLE_LOGIN_USER_CACHE_RESTRICTION === 'true'
@@ -229,6 +258,9 @@ if (envParams.SUBSONIC_PATH !== undefined) {
 if (envParams.SINGER_SOURCE_PRIORITY !== undefined) {
   const priority = envParams.SINGER_SOURCE_PRIORITY.split(',').filter(s => s === 'tx' || s === 'wy') as Array<'tx' | 'wy'>
   if (priority.length > 0) global.lx.config['singer.sourcePriority'] = priority
+}
+if (envParams.SERVER_NAME) {
+  global.lx.config.serverName = envParams.SERVER_NAME
 }
 
 if (envUsers.length) {
@@ -369,10 +401,14 @@ const { startServer } = require('@/server')
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const WebDAVSync = require('@/utils/webdavSync').default
 const webdavSync = new WebDAVSync({
+  enable: global.lx.config['webdav.enable'],
   url: global.lx.config['webdav.url'],
   username: global.lx.config['webdav.username'],
   password: global.lx.config['webdav.password'],
+  syncPath: global.lx.config['webdav.syncPath'],
+  backupPath: global.lx.config['webdav.backupPath'],
   interval: global.lx.config['sync.interval'],
+  backupInterval: global.lx.config['sync.backupInterval'],
 }, global.lx.dataPath)
 
 // 如果配置了 WebDAV，在启动时尝试从远程恢复
@@ -434,10 +470,14 @@ if (webdavSync.isConfigured()) {
 // 导出 webdavSync 实例供 API 使用
 global.lx.webdavSync = webdavSync
 
-// [新增] 确保数据目录下的 _open 目录存在 (用于公共受限资源)
+// [新增] 确保数据目录下的 _open 及 _open/library 目录存在 (用于公共受限资源 & 公开收藏)
 const openDir = path.join(global.lx.userPath, '_open')
+const openLibDir = path.join(openDir, 'library')
 if (!fs.existsSync(openDir)) {
   fs.mkdirSync(openDir, { recursive: true })
+}
+if (!fs.existsSync(openLibDir)) {
+  fs.mkdirSync(openLibDir, { recursive: true })
 }
 
 // 启动前最后保存一次合并后的配置，确保环境变量被固化到 config.js 中
@@ -448,12 +488,18 @@ startServer(global.lx.config.port, global.lx.config.bindIP)
 // 监控 config.js 变动以实现热重载 (由于 nodemon 已忽略该文件)
 const rootConfigPath = process.env.CONFIG_PATH || path.join(process.cwd(), 'config.js')
 if (fs.existsSync(rootConfigPath)) {
+  lastConfigHash = getConfigHash(rootConfigPath)
   let debounceTimer: NodeJS.Timeout | null = null
   fs.watch(rootConfigPath, (event) => {
     if (event === 'change') {
       if (debounceTimer) clearTimeout(debounceTimer)
       debounceTimer = setTimeout(() => {
-        console.log('Detected config.js change, hot-reloading...')
+        const currentHash = getConfigHash(rootConfigPath)
+        // 如果内容未发生实质改变（如内部写配置触发的 fs.watch 事件），跳过热重载
+        if (currentHash && currentHash === lastConfigHash) return
+        lastConfigHash = currentHash
+
+        console.log('Detected external config.js change, hot-reloading...')
         try {
           delete require.cache[require.resolve(rootConfigPath)]
           margeConfig(rootConfigPath)
@@ -463,7 +509,10 @@ if (fs.existsSync(rootConfigPath)) {
               url: global.lx.config['webdav.url'],
               username: global.lx.config['webdav.username'],
               password: global.lx.config['webdav.password'],
+              syncPath: global.lx.config['webdav.syncPath'],
+              backupPath: global.lx.config['webdav.backupPath'],
               interval: global.lx.config['sync.interval'],
+              backupInterval: global.lx.config['sync.backupInterval'],
             })
           }
         } catch (e) {

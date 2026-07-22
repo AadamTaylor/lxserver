@@ -610,14 +610,19 @@ class App {
 
         const currentSelected = document.getElementById(`${type}-user-select`).value;
 
-        dropdown.innerHTML = this.allUsers.map(user => `
+        dropdown.innerHTML = this.allUsers.map(user => {
+            const isPublic = user.name === '_open';
+            const displayName = isPublic ? '公开用户 (_open)' : this.escapeHtml(user.name);
+            const avatarChar = isPublic ? '🌐' : this.escapeHtml(user.name.charAt(0).toUpperCase());
+            const avatarStyle = isPublic ? 'background: linear-gradient(135deg, #10b981, #059669); font-size:12px;' : '';
+            return `
             <div class="dropdown-item ${user.name === currentSelected ? 'active' : ''}" 
-                 onclick="app.selectUser('${type}', '${user.name}')">
-                <div class="dropdown-avatar">${user.name.charAt(0).toUpperCase()}</div>
-                <span>${this.escapeHtml(user.name)}</span>
+                 onclick="app.selectUser('${type}', '${this.escapeHtml(user.name)}')">
+                <div class="dropdown-avatar" style="${avatarStyle}">${avatarChar}</div>
+                <span>${displayName}</span>
                 ${user.name === currentSelected ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" style="width:14px;height:14px;margin-left:auto;"><polyline points="20 6 9 17 4 12"></polyline></svg>' : ''}
             </div>
-        `).join('');
+        `}).join('');
     }
 
     renderUserSelectionGrid(type) {
@@ -631,13 +636,19 @@ class App {
 
         container.innerHTML = `
             <div class="user-selection-grid fade-in">
-                ${this.allUsers.map(user => `
-                    <div class="user-select-card" onclick="app.selectUser('${type}', '${user.name}')">
-                        <div class="avatar">${user.name.charAt(0).toUpperCase()}</div>
-                        <div class="name">${this.escapeHtml(user.name)}</div>
-                        <div class="role">用户数据</div>
+                ${this.allUsers.map(user => {
+                    const isPublic = user.name === '_open';
+                    const displayName = isPublic ? '公开用户 (_open)' : this.escapeHtml(user.name);
+                    const roleText = isPublic ? '公共数据与歌单' : '用户数据';
+                    const avatarStyle = isPublic ? 'background: linear-gradient(135deg, #10b981, #059669); font-size: 1.5rem;' : '';
+                    const avatarHtml = isPublic ? '🌐' : this.escapeHtml(user.name.charAt(0).toUpperCase());
+                    return `
+                    <div class="user-select-card" onclick="app.selectUser('${type}', '${this.escapeHtml(user.name)}')">
+                        <div class="avatar" style="${avatarStyle}">${avatarHtml}</div>
+                        <div class="name">${displayName}</div>
+                        <div class="role">${roleText}</div>
                     </div>
-                `).join('')}
+                `}).join('')}
             </div>
         `;
     }
@@ -647,7 +658,7 @@ class App {
         const title = document.querySelector(`#${type}-user-selector .selected-username`);
 
         input.value = username;
-        title.textContent = username;
+        title.textContent = username === '_open' ? '公开用户 (_open)' : username;
 
         // 关闭下拉
         document.getElementById(`${type}-user-dropdown`).classList.add('hidden');
@@ -667,7 +678,7 @@ class App {
     async loadUsers() {
         try {
             const users = await this.request('/api/users');
-            this.users = users;
+            this.users = users.filter(u => u.name !== '_open');
             this.renderUsers();
         } catch (err) {
             console.error('Failed to load users:', err);
@@ -1695,6 +1706,9 @@ class App {
             if (form.elements['user.enablePublicRestriction']) {
                 form.elements['user.enablePublicRestriction'].checked = config['user.enablePublicRestriction'] === true;
             }
+            if (form.elements['user.enablePublicFavorites']) {
+                form.elements['user.enablePublicFavorites'].checked = config['user.enablePublicFavorites'] === true;
+            }
             if (form.elements['user.enableLoginCacheRestriction']) {
                 form.elements['user.enableLoginCacheRestriction'].checked = config['user.enableLoginCacheRestriction'] === true;
             }
@@ -1721,6 +1735,9 @@ class App {
             }
 
             // WebDAV 配置
+            if (form.elements['webdav.enable']) {
+                form.elements['webdav.enable'].checked = config['webdav.enable'] === true;
+            }
             if (form.elements['webdav.url']) {
                 form.elements['webdav.url'].value = config['webdav.url'] || '';
             }
@@ -1730,8 +1747,17 @@ class App {
             if (form.elements['webdav.password']) {
                 form.elements['webdav.password'].value = config['webdav.password'] || '';
             }
+            if (form.elements['webdav.syncPath']) {
+                form.elements['webdav.syncPath'].value = config['webdav.syncPath'] || '/lx-sync';
+            }
+            if (form.elements['webdav.backupPath']) {
+                form.elements['webdav.backupPath'].value = config['webdav.backupPath'] || '/lx-sync-backups';
+            }
             if (form.elements['sync.interval']) {
                 form.elements['sync.interval'].value = config['sync.interval'] || 60;
+            }
+            if (form.elements['sync.backupInterval']) {
+                form.elements['sync.backupInterval'].value = config['sync.backupInterval'] || 24;
             }
 
             // URL路径配置
@@ -1753,6 +1779,21 @@ class App {
             }
             if (form.elements['subsonic.path']) {
                 form.elements['subsonic.path'].value = config['subsonic.path'] || '/rest';
+            }
+            if (form.elements['subsonic.enableDebug']) {
+                form.elements['subsonic.enableDebug'].checked = config['subsonic.enableDebug'] === true;
+            }
+            if (form.elements['subsonic.onlineSearch']) {
+                form.elements['subsonic.onlineSearch'].checked = config['subsonic.onlineSearch'] !== false;
+            }
+            if (form.elements['subsonic.onlineSearchMode']) {
+                form.elements['subsonic.onlineSearchMode'].value = config['subsonic.onlineSearchMode'] || 'fallback';
+            }
+            if (form.elements['subsonic.onlineSearchSources']) {
+                form.elements['subsonic.onlineSearchSources'].value = config['subsonic.onlineSearchSources'] || 'wy,tx,kw,kg,mg';
+            }
+            if (form.elements['subsonic.lyricTranslation']) {
+                form.elements['subsonic.lyricTranslation'].checked = config['subsonic.lyricTranslation'] !== false;
             }
         } catch (err) {
             console.error('Failed to load config:', err);
@@ -1799,20 +1840,30 @@ class App {
             'user.enablePath': formData.get('user.enablePath') === 'on',
             'user.enableRoot': formData.get('user.enableRoot') === 'on',
             'user.enablePublicRestriction': formData.get('user.enablePublicRestriction') === 'on',
+            'user.enablePublicFavorites': formData.get('user.enablePublicFavorites') === 'on',
             'user.enableLoginCacheRestriction': formData.get('user.enableLoginCacheRestriction') === 'on',
             'user.enableCacheSizeLimit': formData.get('user.enableCacheSizeLimit') === 'on',
             'user.cacheSizeLimit': parseInt(formData.get('user.cacheSizeLimit')) || 2000,
             'frontend.password': formData.get('frontend.password'),
             'player.enableAuth': formData.get('player.enableAuth') === 'on',
             'player.password': formData.get('player.password'),
+            'webdav.enable': formData.get('webdav.enable') === 'on',
             'webdav.url': formData.get('webdav.url'),
             'webdav.username': formData.get('webdav.username'),
             'webdav.password': formData.get('webdav.password'),
+            'webdav.syncPath': (formData.get('webdav.syncPath') || '').trim() || '/lx-sync',
+            'webdav.backupPath': (formData.get('webdav.backupPath') || '').trim() || '/lx-sync-backups',
             'sync.interval': parseInt(formData.get('sync.interval')) || 60,
+            'sync.backupInterval': parseInt(formData.get('sync.backupInterval')) || 24,
             'admin.path': adminPath,
             'player.path': playerPath,
             'subsonic.enable': formData.get('subsonic.enable') === 'on',
             'subsonic.path': (formData.get('subsonic.path') || '').trim() || '/rest',
+            'subsonic.enableDebug': formData.get('subsonic.enableDebug') === 'on',
+            'subsonic.onlineSearch': formData.get('subsonic.onlineSearch') === 'on',
+            'subsonic.onlineSearchMode': formData.get('subsonic.onlineSearchMode') || 'fallback',
+            'subsonic.onlineSearchSources': (formData.get('subsonic.onlineSearchSources') || '').trim() || 'wy,tx,kw,kg,mg',
+            'subsonic.lyricTranslation': formData.get('subsonic.lyricTranslation') === 'on',
             'singer.sourcePriority': formData.get('singer.sourcePriority'),
             'system.allowUnsafeVM': formData.get('system.allowUnsafeVM') === 'on',
         };

@@ -8,7 +8,7 @@
   <h1>LX Sync Server</h1> -->
   <p>
     <img src="https://img.shields.io/badge/build-passing-brightgreen?style=flat-square" alt="Build Status">
-    <img src="https://img.shields.io/badge/version-v1.9.4-blue?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/version-v2.0.0-blue?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/node-%3E%3D16-green?style=flat-square" alt="Node Version">
     <img src="https://img.shields.io/github/license/XCQ0607/lxserver?style=flat-square" alt="License">
     <br>
@@ -109,12 +109,21 @@
   <img src="md/singer.png" width="400" alt="歌手展示">
 </p>
 
-### 10. Subsonic 协议支持
+### 10. Subsonic 协议与全网检索支持
 
-全面适配 Subsonic 协议，支持使用各类 Subsonic 客户端（如音流、Feishin 等）连接并播放本站资源。
+全面适配 Subsonic 协议，支持使用各类 Subsonic 客户端（如音流、Feishin 等）连接并播放本站资源。支持在 Subsonic 客户端中通过 `wy:`, `kg:`, `tx:`, `kw:`, `mg:` 等指定平台前缀，或 `online:` / `local:` 强制指定全网在线或本地搜索。
 
 <p align="center">
-  <img src="md/subsonic.png" width="800" alt="Subsonic 支持">
+  <img src="md/subsonic.png" width="400" alt="Subsonic 支持">
+  <img src="md/subsonic-search.png" width="400" alt="Subsonic 在线全网搜索">
+</p>
+
+### 11. 公共曲库与共享收藏
+
+在后台系统配置中开启 **“开启公共收藏和歌曲”** 之后，所有用户（无论未登录或不同账号）均可共同拥有并共享一个公共曲库与公开歌单列表。
+
+<p align="center">
+  <img src="md/_open_song.png" width="800" alt="公共曲库与共享收藏">
 </p>
 
 ## 🔒 访问控制与安全
@@ -129,13 +138,13 @@
 2. **Web 界面配置**：
    登录管理后台（默认端口 9527），进入 **"系统配置"**，勾选 **"启用 Web 播放器访问密码"** 并设置密码。
 
-### 自定义源权限矩阵 (当 `user.enablePublicRestriction` 开启时)
+### 权限与公开源限制矩阵 (当 `user.enablePublicRestriction` 开启时)
 
-| 用户类型             | 查看列表 | 使用/切换(仅个人) | 上传/导入公开源 | 删除/修改公开源 |
-| :------------------- | :------- | :---------------- | :-------------- | :-------------- |
-| **管理员**     | ✅ 允许  | ✅ 允许           | ✅ 允许         | ✅ 允许         |
-| **已登录用户** | ✅ 允许  | ✅ 允许           | ❌ 禁止         | ❌ 禁止         |
-| **未登录访客** | ❌ 隐藏  | ❌ 禁止           | ❌ 禁止         | ❌ 禁止         |
+| 用户类型             | 查看列表 | 使用/切换(仅个人) | 修改默认音质 | 上传/导入公开源 | 删除/修改公开源 |
+| :------------------- | :------- | :---------------- | :----------- | :-------------- | :-------------- |
+| **管理员**     | ✅ 允许  | ✅ 允许           | ✅ 允许      | ✅ 允许         | ✅ 允许         |
+| **已登录用户** | ✅ 允许  | ✅ 允许           | ✅ 允许      | ❌ 禁止         | ❌ 禁止         |
+| **未登录访客** | ❌ 隐藏  | ❌ 禁止           | ❌ 禁止      | ❌ 禁止         | ❌ 禁止         |
 
 ## 📱 移动端适配
 
@@ -254,7 +263,7 @@ npm start
 | `SUBSONIC_ENABLE`                     | `subsonic.enable`                  | 是否启用 Subsonic 协议支持 (服务默认开启)                          | `true`           |
 | `SUBSONIC_PATH`                       | `subsonic.path`                    | Subsonic 访问路径 (默认为 `/rest`)                               | `/rest`          |
 | `FRONTEND_PASSWORD`                   | `frontend.password`                | Web 管理界面访问密码                                               | `123456`         |
-| `SERVER_NAME`                         | `serverName`                       | 同步服务名称                                                       | `My Sync Server` |
+| `SERVER_NAME`                         | `serverName`                       | 同步服务名称                                                       | `lxserver`       |
 | `MAX_SNAPSHOT_NUM`                    | `maxSnapshotNum`                   | 保留的最大快照数量                                                 | `10`             |
 | `CONFIG_PATH`                         | -                                    | 指定外部配置文件的绝对路径                                         | -                  |
 | `DATA_PATH`                           | -                                    | 指定数据存储目录的绝对路径                                         | `./data`         |
@@ -262,14 +271,19 @@ npm start
 | `PROXY_HEADER`                        | `proxy.header`                     | 代理转发 IP 头 (如 `x-real-ip`)                                  | -                  |
 | `USER_ENABLE_ROOT`                    | `user.enableRoot`                  | 启用根路径 (开启后连接URL即为 `ip:port`，不允许不同用户密码相同) | `false`          |
 | `USER_ENABLE_PATH`                    | `user.enablePath`                  | 启用用户路径 (开启后连接URL需为 `ip:port/用户名`，允许密码相同)  | `true`           |
+| `WEBDAV_ENABLE`                       | `webdav.enable`                    | 是否启用 WebDAV 同步与备份                                         | `false`          |
 | `WEBDAV_URL`                          | `webdav.url`                       | WebDAV 地址                                                        | -                  |
 | `WEBDAV_USERNAME`                     | `webdav.username`                  | WebDAV 用户名                                                      | -                  |
 | `WEBDAV_PASSWORD`                     | `webdav.password`                  | WebDAV 密码                                                        | -                  |
-| `SYNC_INTERVAL`                       | `sync.interval`                    | WebDAV 自动备份间隔(分钟)                                          | `60`             |
+| `WEBDAV_SYNC_PATH`                    | `webdav.syncPath`                  | WebDAV 增量同步远端路径                                            | `/lx-sync`         |
+| `WEBDAV_BACKUP_PATH`                  | `webdav.backupPath`                | WebDAV 全量备份远端路径                                            | `/lx-sync-backups` |
+| `SYNC_INTERVAL`                       | `sync.interval`                    | WebDAV 增量同步检测间隔(分钟)                                      | `60`             |
+| `BACKUP_INTERVAL`                     | `sync.backupInterval`              | WebDAV 全量备份间隔(小时)                                          | `24`             |
 | `ENABLE_WEBPLAYER_AUTH`               | `player.enableAuth`                | 是否启用 Web 播放器访问密码                                        | `false`          |
-| `WEBPLAYER_PASSWORD`                  | `player.password`                  | Web 播放器访问密码                                                 | 123456             |
+| `WEBPLAYER_PASSWORD`                  | `player.password`                  | Web 播放器访问密码                                                 | `123456`         |
 | `DISABLE_TELEMETRY`                   | `disableTelemetry`                 | 是否禁用匿名数据统计，系统更新提示以及系统公告提示                 | `false`          |
 | `ENABLE_PUBLIC_USER_RESTRICTION`      | `user.enablePublicRestriction`     | 是否启用公开用户权限限制 (限制上传、删除公开源、缓存到服务器等)    | `true`           |
+| `ENABLE_PUBLIC_FAVORITES`             | `user.enablePublicFavorites`       | 是否开启公开收藏和歌曲 (开启后允许公开/未登录用户查看及播放公开收藏) | `false`          |
 | `ENABLE_LOGIN_USER_CACHE_RESTRICTION` | `user.enableLoginCacheRestriction` | 是否启用登录用户缓存限制 (开启后限非管理员登录用户的缓存设置)      | `false`          |
 | `ENABLE_CACHE_SIZE_LIMIT`             | `user.enableCacheSizeLimit`        | 是否启用缓存空间限制 (开启后超出容量将按 LRU 自动清理)             | `false`          |
 | `CACHE_SIZE_LIMIT`                    | `user.cacheSizeLimit`              | 缓存空间限制大小 (单位: MB)                                        | `2000`           |
@@ -278,6 +292,21 @@ npm start
 | `PROXY_ALL_ADDRESS`                   | `proxy.all.address`                | 代理地址 (支持 http:// 或 socks5://)                               | -                  |
 | `SINGER_SOURCE_PRIORITY`              | `singer.sourcePriority`            | 歌手信息获取来源优先级 (如 `tx,wy` 或 `wy,tx`)                 | `tx,wy`          |
 | `LX_USER_<用户名>`                    | `users` 数组                       | 快速添加用户，值为该用户的密码 (如 `LX_USER_test=123`)           | -                  |
+
+### 仅在 `config.js` 中生效的高级配置项
+
+部分高级选项仅可通过直接修改 `config.js` 进行配置：
+
+| 配置项 | 说明 | 默认值 |
+| --- | --- | --- |
+| `subsonic.enableDebug` | 是否开启 Subsonic 调试日志模式 | `true` |
+| `subsonic.onlineSearch` | 是否开启 Subsonic 在线全网搜索 | `true` |
+| `subsonic.onlineSearchMode` | Subsonic 在线搜索模式 (`fallback` 回退模式 / `merge` 合并模式 / `local_only` 仅本地) | `"fallback"` |
+| `subsonic.onlineSearchSources` | Subsonic 在线搜索默认音源列表 | `"wy,tx,kw,kg,mg"` |
+| `subsonic.lyricTranslation` | Subsonic 歌词中是否包含翻译 | `true` |
+| `artist.maxFetchPages` | 歌手歌曲最大抓取页数 | `20` |
+| `cache.namingPattern` | 缓存文件命名规则 (`simple` / `custom`) | `"simple"` |
+| `system.allowUnsafeVM` | 是否允许运行 VM 模式自定义源脚本 (需注意安全风险) | `false` |
 
 > **提示**：目前服务支持 `启用根路径` (URL配置为 `ip:port`) 和 `启用用户路径` (URL配置为 `ip:port/username`) 两种数据同步连接方式。如果没有启用用户路径，则必须保证每一个同步用户的鉴权密码不重复。
 
@@ -301,15 +330,24 @@ npm start
 - Web 播放器逻辑参考 [lx-music-desktop](https://github.com/lyswhut/lx-music-desktop)。
 - 接口实现基于 `musicsdk`。
 
+### 👥 贡献者 (Contributors)
+
+<a href="https://github.com/xcq0607/lxserver/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=xcq0607/lxserver" />
+</a>
+
+
 ## 📈 Star History
 
-<a href="https://star-history.com/#XCQ0607/lxserver&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=XCQ0607/lxserver&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=XCQ0607/lxserver&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=XCQ0607/lxserver&type=Date" />
-  </picture>
+<a href="https://gitdata.xuanhun520.com/?repos=xcq0607/lxserver&type=Date">
+<picture >
+  <source media="(prefers-color-scheme: dark) and (max-width: 800px)" srcset="https://gitdata.xuanhun520.com/api/starimg?repos=xcq0607/lxserver&type=Date&theme=dark" />
+  <source  media="(prefers-color-scheme: light) and (max-width: 800px)" srcset="https://gitdata.xuanhun520.com/api/starimg?repos=xcq0607/lxserver&type=Date&theme=light" />
+  <img style="width: 800px; height: 533px;" alt="Star History Chart" src="https://gitdata.xuanhun520.com/api/starimg?repos=xcq0607/lxserver&type=Date&theme=dark" />
+</picture>
 </a>
+
+
 
 ## 📄 开源协议
 

@@ -28,6 +28,18 @@ class SubsonicHandler {
     // 预缓存歌曲 ID -> 封面 URL，避免 getCoverArt 重新请求 SDK
     private songPicUrlCache = new Map<string, string>()
 
+    // 在线全网搜索歌曲缓存 (ID -> MusicInfo)，确保后续 getSong / getCoverArt / getLyrics 能精准查到歌曲元数据
+    private onlineSongCache = new Map<string, LX.Music.MusicInfo>()
+
+    private cacheOnlineSong(music: LX.Music.MusicInfo) {
+        if (!music || !music.id) return
+        if (this.onlineSongCache.size > 5000) {
+            const firstKey = this.onlineSongCache.keys().next().value
+            if (firstKey) this.onlineSongCache.delete(firstKey)
+        }
+        this.onlineSongCache.set(music.id, music)
+    }
+
     // ─────────────────────────────────────────────
     // 鉴权
     // ─────────────────────────────────────────────
@@ -209,13 +221,18 @@ class SubsonicHandler {
         const { pathname } = urlObj
         const method = pathname.split('/').pop()?.split('.')[0] || ''
         const logId = params.get('id')
+        const logQuery = params.get('query')
         const logArtist = params.get('artist')
         const logTitle = params.get('title')
         let logDetails = `user=${username}`
         if (logId) logDetails += ` id=${logId}`
-        if (logArtist) logDetails += ` artist=${logArtist}`
-        if (logTitle) logDetails += ` title=${logTitle}`
-        // console.log(`[Subsonic] Request: ${method} (${format}) ${logDetails}`)
+        if (logQuery) logDetails += ` query="${logQuery}"`
+        if (logArtist) logDetails += ` artist="${logArtist}"`
+        if (logTitle) logDetails += ` title="${logTitle}"`
+
+        if (global.lx.config['subsonic.enableDebug']) {
+            console.log(`[Subsonic Debug] ${req.method} /${method} (${format}) ${logDetails}`)
+        }
 
         try {
             switch (method) {
@@ -288,7 +305,7 @@ class SubsonicHandler {
                 case 'search':
                 case 'search2':
                 case 'search3':
-                    return this.handleSearch(res, username, params, format)
+                    return this.handleSearch(res, username, params, format, method)
 
                 case 'getStarred':
                     return this.handleGetStarred(res, username, format, false)
@@ -323,6 +340,9 @@ class SubsonicHandler {
                         : { scanStatus: { attrs: { scanning: false, count: 0 } } }, format)
 
                 default:
+                    if (global.lx.config['subsonic.enableDebug']) {
+                        console.warn(`[Subsonic Debug ⚠️ 未实现的接口] ${req.method} /${method} (${format}) ${logDetails}`)
+                    }
                     return this.sendError(res, 0, 'Method not found: ' + method, format)
             }
         } catch (err: any) {
@@ -429,30 +449,43 @@ class SubsonicHandler {
      */
     private getBestQualityMeta(music: LX.Music.MusicInfo) {
         const meta = (music as any).meta || {}
-        const qualitys = meta.qualitys || (music as any).types || []
+        const qualitys = (music as any).types || (music as any)._types || meta.qualitys || meta.types || meta._types || (music as any)._qualitys || meta._qualitys || []
 
-        // 定义检查逻辑：master > atmos_plus > atmos > hires > flac24bit > flac > 320k > 192k > 128k
         const qMap: Record<string, { bitRate: number, suffix: string, contentType: string }> = {
-            'master': { bitRate: 2304, suffix: 'flac', contentType: 'audio/flac' },
-            'atmos_plus': { bitRate: 1500, suffix: 'm4a', contentType: 'audio/mp4' },
-            'atmos': { bitRate: 1000, suffix: 'm4a', contentType: 'audio/mp4' },
-            'hires': { bitRate: 2304, suffix: 'flac', contentType: 'audio/flac' },
-            'flac24bit': { bitRate: 2304, suffix: 'flac', contentType: 'audio/flac' },
-            'flac': { bitRate: 999, suffix: 'flac', contentType: 'audio/flac' },
-            '320k': { bitRate: 320, suffix: 'mp3', contentType: 'audio/mpeg' },
-            '192k': { bitRate: 192, suffix: 'mp3', contentType: 'audio/mpeg' },
-            '128k': { bitRate: 128, suffix: 'mp3', contentType: 'audio/mpeg' },
+            'master': { bitRate: 2304, suffix: 'Master', contentType: 'audio/flac' },
+            'atmos_plus': { bitRate: 1500, suffix: 'Atmos+', contentType: 'audio/mp4' },
+            'atmos': { bitRate: 1000, suffix: 'Atmos', contentType: 'audio/mp4' },
+            'hires': { bitRate: 2304, suffix: 'Hi-Res', contentType: 'audio/flac' },
+            'flac24bit': { bitRate: 2304, suffix: 'Hi-Res', contentType: 'audio/flac' },
+            'flac': { bitRate: 999, suffix: '无损', contentType: 'audio/flac' },
+            '320k': { bitRate: 320, suffix: '320k', contentType: 'audio/mpeg' },
+            '192k': { bitRate: 192, suffix: '192k', contentType: 'audio/mpeg' },
+            '128k': { bitRate: 128, suffix: '128k', contentType: 'audio/mpeg' },
         }
 
-        // 尝试按优先级匹配
+        const hasQuality = (q: string) => {
+            if (Array.isArray(qualitys)) {
+                return qualitys.some((item: any) => item === q || item?.type === q || item?.name === q)
+            } else if (qualitys && typeof qualitys === 'object') {
+                return Boolean((qualitys as any)[q])
+            }
+            return false
+        }
+
+        // 尝试按优先级匹配最佳音质
         for (const q of ['master', 'atmos_plus', 'atmos', 'hires', 'flac24bit', 'flac', '320k', '192k', '128k']) {
-            if (qualitys.some((item: any) => item.type === q)) {
+            if (hasQuality(q)) {
                 return { ...qMap[q], size: 0 }
             }
         }
 
+        // 若是在线全网检索歌曲，没抓到 types 信息的兜底返回 320k
+        if (music.id && music.id.includes('_')) {
+            return { bitRate: 320, size: 0, suffix: '320k', contentType: 'audio/mpeg' }
+        }
+
         // 兜底返回 128k
-        return { bitRate: 128, size: 0, suffix: 'mp3', contentType: 'audio/mpeg' }
+        return { bitRate: 128, size: 0, suffix: '128k', contentType: 'audio/mpeg' }
     }
 
     /**
@@ -477,6 +510,41 @@ class SubsonicHandler {
             const list = listInfo.list as LX.Music.MusicInfo[]
             music = list.find((m: any) => m.id === id)
             if (music) return { music, listId: listInfo.id }
+        }
+
+        // 检查本地专辑库
+        try {
+            const libAlbums = await this.getLibraryData(username, 'albums')
+            for (const alb of libAlbums) {
+                const source = alb.source || 'wy'
+                for (const s of (alb.list || [])) {
+                    const songId = `${source}_${s.songmid || s.songId}`
+                    if (songId === id) {
+                        return {
+                            music: {
+                                id: songId,
+                                name: s.name,
+                                singer: s.singer,
+                                source: source,
+                                songmid: s.songmid,
+                                interval: s.interval || '0',
+                                img: s.img,
+                                meta: {
+                                    picUrl: s.img,
+                                    albumName: s.albumName || alb.name,
+                                    albumId: s.albumMid || alb.id,
+                                },
+                            } as any,
+                            listId: `alb_${source}_${alb.id}`,
+                        }
+                    }
+                }
+            }
+        } catch (e) { }
+
+        // 检查在线搜索缓存
+        if (this.onlineSongCache.has(id)) {
+            return { music: this.onlineSongCache.get(id)!, listId: 'online' }
         }
 
         return null
@@ -875,10 +943,35 @@ class SubsonicHandler {
         const id = params.get('id')
         if (!id) return this.sendError(res, 10, 'Required parameter is missing: id', format)
 
-        const found = await this.findMusicById(username, id)
-        if (!found) return this.sendError(res, 70, 'Song not found: ' + id, format)
+        let music: LX.Music.MusicInfo | null = null
+        let listId = 'online'
 
-        const { music, listId } = found
+        const found = await this.findMusicById(username, id)
+        if (found) {
+            music = found.music
+            listId = found.listId
+        } else if (id.includes('_')) {
+            // 在线歌曲 ID 动态元数据兜底 (处理 wy_1378492134, tx_... 等客户端请求非本地库歌曲)
+            const parts = id.split('_')
+            const source = parts[0]
+            const songmid = parts.slice(1).join('_')
+            const title = params.get('title') || params.get('name') || songmid
+            const singer = params.get('artist') || params.get('singer') || 'Unknown Artist'
+            music = {
+                id,
+                name: title,
+                singer: singer,
+                source: source,
+                songmid: songmid,
+                interval: '0',
+                meta: {
+                    songId: songmid,
+                },
+            } as any
+        }
+
+        if (!music) return this.sendError(res, 70, 'Song not found: ' + id, format)
+
         if (format === 'json') {
             return this.sendResponse(res, { song: this.musicToSongFlat(music, listId) }, format)
         }
@@ -1339,58 +1432,322 @@ class SubsonicHandler {
         }, format)
     }
 
-    private async handleSearch(res: http.ServerResponse, username: string, params: URLSearchParams, format: string) {
-        let query = (params.get('query') || '').trim().toLowerCase()
-        if (query === '""' || query === "''") query = '' // 处理某些客户端发送的空占位符
+    private async fetchOnlineSearchSongs(cleanQuery: string, sources: string[], limit: number = 30): Promise<{ music: LX.Music.MusicInfo, listId: string }[]> {
+        if (!cleanQuery) return []
+        const results: { music: LX.Music.MusicInfo, listId: string }[] = []
+        const validSources = sources.filter(s => ['wy', 'tx', 'kw', 'kg', 'mg'].includes(s) && musicSdk[s]?.musicSearch?.search)
+        // [限制] 单个平台最大获取数量上限
+        const targetLimit = Math.min(limit, 50)
 
+        await Promise.all(validSources.map(async source => {
+            try {
+                // 计算需要的页数 (网易云 wy 单页限制 20 条，如需要 50 条则自动抓取前 3 页)
+                const pageSize = source === 'kg' ? Math.min(targetLimit, 100) : source === 'wy' ? 20 : 30
+                const pagesToFetch = Math.min(Math.ceil(targetLimit / pageSize), 3) // 最多自动抓取前 3 页
+
+                const allItems: any[] = []
+                const existingIds = new Set<string>()
+
+                for (let page = 1; page <= pagesToFetch; page++) {
+                    const searchRes = await musicSdk[source].musicSearch.search(cleanQuery, page, pageSize)
+                    const list = Array.isArray(searchRes?.list) ? searchRes.list : []
+                    if (list.length === 0) break
+
+                    for (const item of list) {
+                        const songmid = String(item.songmid || item.id || '')
+                        if (!songmid || existingIds.has(songmid)) continue
+                        existingIds.add(songmid)
+                        allItems.push(item)
+                    }
+
+                    if (allItems.length >= targetLimit) break
+                }
+
+                for (const item of allItems.slice(0, targetLimit)) {
+                    const songmid = String(item.songmid || item.id || '')
+                    const id = `${source}_${songmid}`
+                    const hash = item.hash || item.meta?.hash || item.types?.[0]?.hash || ''
+                    const music: LX.Music.MusicInfo = {
+                        id,
+                        name: item.name,
+                        singer: item.singer,
+                        source: source,
+                        songmid: songmid,
+                        hash: hash,
+                        interval: item.interval || '0',
+                        _interval: item._interval || item.interval || '0',
+                        img: item.img,
+                        types: item.types || item._types || [],
+                        _types: item._types || item.types || {},
+                        meta: {
+                            ...(item.meta || {}),
+                            hash: hash,
+                            picUrl: item.img,
+                            albumName: item.albumName || item.name,
+                            albumId: item.albumId,
+                            qualitys: item.types || item._types || [],
+                            _types: item._types || item.types || {},
+                        },
+                    } as any
+                    this.cacheOnlineSong(music)
+                    results.push({ music, listId: 'online' })
+                }
+            } catch (err: any) {
+                console.error(`[Subsonic] Online search error for source=${source}:`, err?.message || err)
+            }
+        }))
+        return results
+    }
+
+    private async handleSearch(res: http.ServerResponse, username: string, params: URLSearchParams, format: string, method: string = 'search3') {
+        let rawQuery = (params.get('query') || '').trim()
+        if (rawQuery === '""' || rawQuery === "''") rawQuery = '' // 处理某些客户端发送的空占位符
+
+        // 0. 解析搜索前缀与搜索模式
+        let searchMode: 'local_only' | 'force_online' | 'fallback' | 'merge' = 'fallback'
+        let targetOnlineSources: string[] = String(global.lx.config['subsonic.onlineSearchSources'] || 'wy,tx,kw,kg,mg').split(',').map(s => s.trim()).filter(Boolean)
+        let cleanQuery = rawQuery
+
+        const lowerQuery = rawQuery.toLowerCase()
+        if (lowerQuery.startsWith('local:') || lowerQuery.startsWith('local：')) {
+            searchMode = 'local_only'
+            cleanQuery = rawQuery.slice(6).trim()
+        } else if (lowerQuery.startsWith('online:') || lowerQuery.startsWith('online：') || lowerQuery.startsWith('net:') || lowerQuery.startsWith('net：')) {
+            searchMode = 'force_online'
+            const colonIdx = rawQuery.indexOf(':') !== -1 ? rawQuery.indexOf(':') : rawQuery.indexOf('：')
+            cleanQuery = rawQuery.slice(colonIdx + 1).trim()
+        } else {
+            // 检查指定的音源前缀: wy:, tx:, kw:, kg:, mg:
+            const knownSources = ['wy', 'tx', 'kw', 'kg', 'mg']
+            let matchedPrefixSource = ''
+            for (const s of knownSources) {
+                if (lowerQuery.startsWith(`${s}:`) || lowerQuery.startsWith(`${s}：`)) {
+                    matchedPrefixSource = s
+                    break
+                }
+            }
+            if (matchedPrefixSource) {
+                searchMode = 'force_online'
+                targetOnlineSources = [matchedPrefixSource]
+                const colonIdx = rawQuery.indexOf(':') !== -1 ? rawQuery.indexOf(':') : rawQuery.indexOf('：')
+                cleanQuery = rawQuery.slice(colonIdx + 1).trim()
+            } else {
+                // 没有前缀，遵循全局后台配置
+                const isOnlineEnabled = global.lx.config['subsonic.onlineSearch'] !== false
+                if (!isOnlineEnabled) {
+                    searchMode = 'local_only'
+                } else {
+                    searchMode = (global.lx.config['subsonic.onlineSearchMode'] as any) || 'fallback'
+                }
+            }
+        }
+
+        const queryForFilter = cleanQuery.toLowerCase()
+
+        // 1. 汇总所有本地歌曲 (去重)
         const userSpace = getUserSpace(username)
         const listData = await userSpace.listManage.getListData()
 
-        // [去重汇总所有歌单歌曲]
         const allSongsMap = new Map<string, { music: LX.Music.MusicInfo, listId: string }>()
-        const collect = (list: LX.Music.MusicInfo[], listId: string) => {
+        const collectSongs = (list: LX.Music.MusicInfo[], listId: string) => {
             for (const m of list) {
                 if (!allSongsMap.has(m.id)) {
                     allSongsMap.set(m.id, { music: m, listId })
                 }
             }
         }
-        collect(listData.loveList, 'love')
-        collect(listData.defaultList, 'default')
+        collectSongs(listData.loveList, 'love')
+        collectSongs(listData.defaultList, 'default')
         for (const list of listData.userList) {
-            collect((list.list || []) as LX.Music.MusicInfo[], list.id)
+            collectSongs((list.list || []) as LX.Music.MusicInfo[], list.id)
         }
-        const uniqueMusics = Array.from(allSongsMap.values())
 
-        // console.log(`[Subsonic] handleSearch query="${query}", total unique musics=${uniqueMusics.length}`)
+        // 补充本地收藏专辑库中的歌曲
+        const libAlbums = await this.getLibraryData(username, 'albums')
+        for (const alb of libAlbums) {
+            const source = alb.source || 'wy'
+            for (const s of (alb.list || [])) {
+                const songId = `${source}_${s.songmid || s.songId}`
+                if (!allSongsMap.has(songId)) {
+                    allSongsMap.set(songId, {
+                        music: {
+                            id: songId,
+                            name: s.name,
+                            singer: s.singer,
+                            source: source,
+                            songmid: s.songmid,
+                            interval: s.interval || '0',
+                            img: s.img,
+                            meta: {
+                                picUrl: s.img,
+                                albumName: s.albumName || alb.name,
+                                albumId: s.albumMid || alb.id,
+                            },
+                        } as any,
+                        listId: `alb_${source}_${alb.id}`,
+                    })
+                }
+            }
+        }
+        const allLocalSongs = Array.from(allSongsMap.values())
 
-        const matched = query
-            ? uniqueMusics.filter(({ music }) =>
-                music.name.toLowerCase().includes(query) ||
-                music.singer.toLowerCase().includes(query) ||
-                ((music as any).meta?.albumName || '').toLowerCase().includes(query)
+        // 2. 汇总所有歌手 (去重)
+        const allArtistsMap = new Map<string, any>()
+        const libArtists = await this.getLibraryData(username, 'artists')
+        for (const a of libArtists) {
+            const id = `art_${a.source || 'wy'}_${a.id}`
+            allArtistsMap.set(id, {
+                id,
+                name: a.name,
+                coverArt: id,
+                artistImageUrl: a.picUrl || a.img,
+                albumCount: 0,
+            })
+        }
+        for (const { music } of allLocalSongs) {
+            const singer = music.singer || 'Unknown Artist'
+            const primarySinger = (singer.split('、')[0] || 'Unknown Artist').trim()
+            const source = music.source
+            const artistId = (music as any).singerId ? `art_${source}_${(music as any).singerId}` : `artist_${primarySinger}`
+            if (!allArtistsMap.has(artistId)) {
+                allArtistsMap.set(artistId, {
+                    id: artistId,
+                    name: primarySinger,
+                    coverArt: artistId,
+                    albumCount: 0,
+                })
+            }
+        }
+        const allLocalArtists = Array.from(allArtistsMap.values())
+
+        // 3. 汇总所有专辑 (去重)
+        const allAlbumsMap = new Map<string, any>()
+        for (const alb of libAlbums) {
+            const source = alb.source || 'wy'
+            const primarySinger = (alb.artistName || '').split('、')[0] || 'LX Music'
+            const artistId = alb.singerId ? `art_${source}_${alb.singerId}` : `artist_${primarySinger}`
+            const albId = `alb_${source}_${alb.id}`
+            allAlbumsMap.set(albId, {
+                id: albId,
+                name: alb.name,
+                title: alb.name,
+                album: alb.name,
+                artist: alb.artistName || 'LX Music',
+                artistId: artistId,
+                isDir: true,
+                coverArt: alb.picUrl || alb.meta?.picUrl || albId,
+                songCount: (alb.list || []).length,
+                duration: (alb.list || []).reduce((s: number, m: any) => s + this.parseDuration(m.interval), 0),
+                created: new Date().toISOString(),
+                playCount: 0,
+                year: alb.publishTime ? parseInt(String(alb.publishTime).split(/[/-]/)[0]) : undefined,
+            })
+        }
+        for (const { music } of allLocalSongs) {
+            const meta = (music as any).meta || {}
+            const albumName = meta.albumName || (music as any).albumName || (music as any).album?.name
+            const rawAlbumId = (music as any).albumMid || (music as any).album?.mid || meta.albumId || (music as any).albumId || (music as any).album?.id
+            if (albumName && albumName !== 'Unknown Album') {
+                const source = music.source
+                const albId = rawAlbumId ? `alb_${source}_${rawAlbumId}` : `album_${Buffer.from(`${albumName}__${music.singer}`).toString('base64url').slice(0, 24)}`
+                if (!allAlbumsMap.has(albId)) {
+                    const primarySinger = (music.singer || '').split('、')[0] || 'Unknown Artist'
+                    const artistId = (music as any).singerId ? `art_${source}_${(music as any).singerId}` : `artist_${primarySinger}`
+                    const picUrl = meta.picUrl || (music as any).img || (music as any).pic
+                    allAlbumsMap.set(albId, {
+                        id: albId,
+                        name: albumName,
+                        title: albumName,
+                        album: albumName,
+                        artist: music.singer || 'Unknown Artist',
+                        artistId: artistId,
+                        isDir: true,
+                        coverArt: picUrl || albId,
+                        songCount: 1,
+                        duration: this.parseDuration(music.interval),
+                        created: new Date().toISOString(),
+                        playCount: 0,
+                    })
+                }
+            }
+        }
+        const allLocalAlbums = Array.from(allAlbumsMap.values())
+
+        // 4. 执行本地检索过滤
+        let matchedSongs = queryForFilter
+            ? allLocalSongs.filter(({ music }) =>
+                music.name.toLowerCase().includes(queryForFilter) ||
+                music.singer.toLowerCase().includes(queryForFilter) ||
+                ((music as any).meta?.albumName || '').toLowerCase().includes(queryForFilter)
             )
-            : uniqueMusics
+            : allLocalSongs
 
-        // console.log(`[Subsonic] handleSearch matched=${matched.length}`)
+        let matchedArtists = queryForFilter
+            ? allLocalArtists.filter(a => a.name.toLowerCase().includes(queryForFilter))
+            : allLocalArtists
 
-        const songCount = parseInt(params.get('songCount') || '20')
+        let matchedAlbums = queryForFilter
+            ? allLocalAlbums.filter(a => a.name.toLowerCase().includes(queryForFilter) || a.artist.toLowerCase().includes(queryForFilter))
+            : allLocalAlbums
+
+        // 5. 分页参数解析
+        const artistCount = params.has('artistCount') ? parseInt(params.get('artistCount') || '20') : 20
+        const artistOffset = parseInt(params.get('artistOffset') || '0')
+        const albumCount = params.has('albumCount') ? parseInt(params.get('albumCount') || '20') : 20
+        const albumOffset = parseInt(params.get('albumOffset') || '0')
+        const songCount = params.has('songCount') ? parseInt(params.get('songCount') || '20') : 20
         const songOffset = parseInt(params.get('songOffset') || '0')
-        const songs = matched.slice(songOffset, songOffset + songCount)
+
+        // 6. 处理在线 API 搜索与模式融合
+        if (cleanQuery && songCount > 0) {
+            if (searchMode === 'force_online') {
+                const onlineResults = await this.fetchOnlineSearchSongs(cleanQuery, targetOnlineSources, songCount)
+                matchedSongs = onlineResults
+            } else if (searchMode === 'merge') {
+                const onlineResults = await this.fetchOnlineSearchSongs(cleanQuery, targetOnlineSources, songCount)
+                const existingIds = new Set(matchedSongs.map(s => s.music.id))
+                for (const item of onlineResults) {
+                    if (!existingIds.has(item.music.id)) {
+                        matchedSongs.push(item)
+                        existingIds.add(item.music.id)
+                    }
+                }
+            } else if (searchMode === 'fallback') {
+                if (matchedSongs.length < songCount) {
+                    const needed = songCount - matchedSongs.length
+                    const onlineResults = await this.fetchOnlineSearchSongs(cleanQuery, targetOnlineSources, needed)
+                    const existingIds = new Set(matchedSongs.map(s => s.music.id))
+                    for (const item of onlineResults) {
+                        if (!existingIds.has(item.music.id)) {
+                            matchedSongs.push(item)
+                            existingIds.add(item.music.id)
+                        }
+                    }
+                }
+            }
+        }
+
+        const pagedArtists = artistCount > 0 ? matchedArtists.slice(artistOffset, artistOffset + artistCount) : []
+        const pagedAlbums = albumCount > 0 ? matchedAlbums.slice(albumOffset, albumOffset + albumCount) : []
+        const pagedSongs = songCount > 0 ? matchedSongs.slice(songOffset, songOffset + songCount) : []
+
+        const wrapKey = method === 'search' ? 'searchResult' : method === 'search2' ? 'searchResult2' : 'searchResult3'
 
         if (format === 'json') {
             return this.sendResponse(res, {
-                searchResult3: {
-                    song: songs.map(({ music, listId }) => this.musicToSongFlat(music, listId)),
-                    album: [],
-                    artist: [],
+                [wrapKey]: {
+                    artist: pagedArtists,
+                    album: pagedAlbums,
+                    song: pagedSongs.map(({ music, listId }) => this.musicToSongFlat(music, listId)),
                 },
             }, format)
         }
         return this.sendResponse(res, {
-            searchResult3: {
+            [wrapKey]: {
                 children: {
-                    song: songs.map(({ music, listId }) => this.musicToSongXml(music, listId)),
+                    artist: pagedArtists.map(a => ({ attrs: a })),
+                    album: pagedAlbums.map(a => ({ attrs: a })),
+                    song: pagedSongs.map(({ music, listId }) => this.musicToSongXml(music, listId)),
                 },
             },
         }, format)
@@ -1655,7 +2012,36 @@ class SubsonicHandler {
                 return this.sendError(res, 0, 'Could not resolve radio track', format)
             }
 
-            const musicInfo: any = { source, songmid, id, meta: { songId: songmid } }
+            const found = await this.findMusicById(username, id)
+            let musicInfo: any = found?.music || { source, songmid, id, meta: { songId: songmid } }
+
+            let hash = musicInfo.hash || musicInfo.meta?.hash || ''
+            if (source === 'kg' && !hash) {
+                try {
+                    const title = musicInfo.name || params.get('title') || params.get('name') || songmid
+                    const searchRes = await musicSdk.kg.musicSearch.search(title, 1, 5)
+                    const match = searchRes?.list?.find((item: any) => String(item.songmid || item.id || item.Audioid) === songmid) || searchRes?.list?.[0]
+                    if (match) {
+                        hash = match.hash || match.meta?.hash || match.types?.[0]?.hash || ''
+                    }
+                } catch (e) {
+                    console.error('[Subsonic] Auto-resolve kg hash for stream failed:', e)
+                }
+            }
+
+            musicInfo = {
+                ...musicInfo,
+                source,
+                songmid,
+                id,
+                ...(hash ? { hash } : {}),
+                meta: {
+                    ...(musicInfo.meta || {}),
+                    songId: songmid,
+                    ...(hash ? { hash } : {}),
+                }
+            }
+
             const result = await callUserApiGetMusicUrl(source as any, musicInfo as any, quality, username)
 
             if (result && result.url) {
@@ -2011,6 +2397,66 @@ class SubsonicHandler {
         }, format)
     }
 
+    /**
+     * 将原文 (lyric) 与翻译 (tlyric) 按时间戳交织合并为双行 LRC 格式
+     * 排列顺序：最上方为原文 ➔ 最下方为翻译
+     */
+    private buildMergedLrc(rawLrc: string, transLrc?: string): string {
+        const isTransEnabled = global.lx.config['subsonic.lyricTranslation'] !== false
+        const effectiveTransLrc = isTransEnabled ? transLrc : ''
+
+        if (!effectiveTransLrc) return rawLrc || ''
+
+        const parseLrcMap = (lrc: string) => {
+            const map = new Map<string, string[]>()
+            if (!lrc) return map
+            const lines = lrc.split(/\r?\n/)
+            const timeRegex = /\[(\d{1,3}:\d{1,2}(?:\.\d{1,3})?)\]/g
+            for (const line of lines) {
+                const text = line.replace(/\[\d{1,3}:\d{1,2}(?:\.\d{1,3})?\]/g, '').trim()
+                if (!text) continue
+                timeRegex.lastIndex = 0
+                const matches = [...line.matchAll(timeRegex)]
+                for (const m of matches) {
+                    const t = m[1]
+                    if (!map.has(t)) map.set(t, [])
+                    map.get(t)!.push(text)
+                }
+            }
+            return map
+        }
+
+        const rawMap = parseLrcMap(rawLrc)
+        const transMap = parseLrcMap(effectiveTransLrc || '')
+
+        // 收集所有出现的时间戳标签
+        const allTimeLabels = Array.from(new Set([...rawMap.keys(), ...transMap.keys()]))
+
+        // 辅助时间戳转毫秒排序
+        const labelToMs = (label: string) => {
+            const parts = label.split(':')
+            const secParts = (parts[1] || '0').split('.')
+            const min = parseInt(parts[0]) || 0
+            const sec = parseInt(secParts[0]) || 0
+            const ms = parseInt((secParts[1] || '0').padEnd(3, '0')) || 0
+            return min * 60000 + sec * 1000 + ms
+        }
+
+        allTimeLabels.sort((a, b) => labelToMs(a) - labelToMs(b))
+
+        const outLines: string[] = []
+        for (const t of allTimeLabels) {
+            const raws = rawMap.get(t) || []
+            const transs = transMap.get(t) || []
+
+            // 排列顺序：原文在上，翻译在下
+            for (const r of raws) outLines.push(`[${t}]${r}`)
+            for (const tr of transs) outLines.push(`[${t}]${tr}`)
+        }
+
+        return outLines.join('\n')
+    }
+
     private async handleGetLyricsBySongId(res: http.ServerResponse, username: string, params: URLSearchParams, format: string) {
         const id = params.get('id')
         if (!id) return this.sendError(res, 10, 'Required parameter is missing: id', format)
@@ -2039,12 +2485,27 @@ class SubsonicHandler {
                 singer: params.get('artist') || ''
             } as any
 
+            let hash = (musicMeta as any).hash || (musicMeta as any).meta?.hash || ''
+            if (source === 'kg' && !hash) {
+                try {
+                    const title = musicMeta.name || params.get('title') || params.get('name') || songmid
+                    const searchRes = await musicSdk.kg.musicSearch.search(title, 1, 5)
+                    const match = searchRes?.list?.find((item: any) => String(item.songmid || item.id || item.Audioid) === songmid) || searchRes?.list?.[0]
+                    if (match) {
+                        hash = match.hash || match.meta?.hash || match.types?.[0]?.hash || ''
+                    }
+                } catch (e) {
+                    console.error('[Subsonic] Auto-resolve kg hash for lyric failed:', e)
+                }
+            }
+
             const songInfo = {
                 songmid: (musicMeta as any).songmid || songmid,
                 name: musicMeta.name || '',
                 singer: musicMeta.singer || '',
-                hash: (musicMeta as any).hash || (musicMeta as any).meta?.hash || '',
+                hash: hash,
                 interval: (musicMeta as any).interval || '',
+                _interval: (musicMeta as any)._interval || (musicMeta as any).interval || '',
                 copyrightId: (musicMeta as any).copyrightId || (musicMeta as any).meta?.copyrightId || '',
                 albumId: (musicMeta as any).albumId || (musicMeta as any).meta?.albumId || '',
                 lrcUrl: (musicMeta as any).lrcUrl || (musicMeta as any).meta?.lrcUrl || '',
@@ -2056,18 +2517,13 @@ class SubsonicHandler {
             const rawLrc = lyricInfo.lyric || ''
             const transLrc = lyricInfo.tlyric || ''
 
-            // 如果是标准 getLyrics 请求 (通过 handleGetLyrics 转发)，返回简化格式
-            // 这里通过判断 params 中是否原本就有 artist/title 来区分
-            if (params.has('artist') && params.has('title') && !id.startsWith('tx_') && !id.startsWith('wy_')) {
-                // 这个逻辑可能有点绕，简化：如果是 json 且没有显式要求 getLyricsBySongId，则按原始 handleGetLyrics 返回
-                // 但实际上为了兼容性，我们统一构造
-            }
+            const mergedLrc = this.buildMergedLrc(rawLrc, transLrc)
 
             // 转换结构化歌词
             const lines = this.parseLrc(rawLrc)
             const tlines = transLrc ? this.parseLrc(transLrc) : []
 
-            const structuredLyrics = [
+            const structuredLyrics: any[] = [
                 {
                     lang: 'und',
                     synced: lines.some(l => l.start !== undefined),
@@ -2079,7 +2535,7 @@ class SubsonicHandler {
 
             if (tlines.length > 0) {
                 structuredLyrics.push({
-                    lang: 'zh', // 假设是中文翻译
+                    lang: 'zh',
                     synced: tlines.some(l => l.start !== undefined),
                     line: tlines,
                     displayArtist: musicMeta.singer,
@@ -2090,11 +2546,11 @@ class SubsonicHandler {
             if (format === 'json') {
                 return this.sendResponse(res, {
                     lyricsList: { structuredLyrics },
-                    // 兼容标准 Subsonic getLyrics
+                    // 兼容标准 Subsonic getLyrics (同频时间戳双行/多行歌词)
                     lyrics: {
                         artist: musicMeta.singer,
                         title: musicMeta.name,
-                        value: rawLrc
+                        value: mergedLrc
                     }
                 }, format)
             }
@@ -2103,9 +2559,8 @@ class SubsonicHandler {
             return this.sendResponse(res, {
                 lyrics: {
                     attrs: { artist: musicMeta.singer, title: musicMeta.name },
-                    children: rawLrc
+                    children: mergedLrc
                 },
-                // OpenSubsonic 扩展通常只在 JSON 中使用结构化格式，XML 端点保持简单
             }, format)
 
         } catch (err: any) {

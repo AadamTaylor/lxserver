@@ -5,7 +5,7 @@
 <div align="center">
   <p>
     <img src="https://img.shields.io/badge/build-passing-brightgreen?style=flat-square" alt="Build Status">
-    <img src="https://img.shields.io/badge/version-v1.9.4-blue?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/version-v2.0.0-blue?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/node-%3E%3D16-green?style=flat-square" alt="Node Version">
     <img src="https://img.shields.io/github/license/XCQ0607/lxserver?style=flat-square" alt="License">
     <br>
@@ -100,12 +100,21 @@ Search for albums and artists and favorite them with one click for quick access 
   <img src="md/singer.png" width="400" alt="Artist Display">
 </p>
 
-### 10. Subsonic Protocol Support
+### 10. Subsonic Protocol & Global Search Support
 
-Fully compatible with the Subsonic protocol, allowing you to use various Subsonic clients (e.g., Yinliu, Feishin, etc.) to connect and play music.
+Fully compatible with the Subsonic protocol, allowing you to use various Subsonic clients (e.g., Yinliu, Feishin, etc.) to connect and play music. Supports specifying platform prefixes such as `wy:`, `kg:`, `tx:`, `kw:`, `mg:`, or using `online:` / `local:` prefixes to force global online or local search within Subsonic clients.
 
 <p align="center">
-  <img src="md/subsonic.png" width="800" alt="Subsonic Support">
+  <img src="md/subsonic.png" width="400" alt="Subsonic Support">
+  <img src="md/subsonic-search.png" width="400" alt="Subsonic Online Search">
+</p>
+
+### 11. Public Library & Shared Favorites
+
+When **"Enable Public Favorites and Songs"** is enabled in the backend settings, all users (guests or different accounts) can share a common public music library and public playlists.
+
+<p align="center">
+  <img src="md/_open_song.png" width="800" alt="Public Library & Shared Favorites">
 </p>
 
 ## 🔒 Access Control & Security
@@ -118,13 +127,13 @@ To protect your privacy, the Web Player supports password protection.
 2. **Web Interface**:
    Log in to the management dashboard (default port 9527), go to **"System Config"**, check **"Enable Web Player Password"** and set your password.
 
-### Custom Source Permission Matrix (when `user.enablePublicRestriction` is enabled)
+### Permission & Custom Source Matrix (when `user.enablePublicRestriction` is enabled)
 
-| User Type | View List | Use/Toggle (Personal) | Upload/Import Public | Delete/Modify Public |
-| :--- | :--- | :--- | :--- | :--- |
-| **Admin** | ✅ Allowed | ✅ Allowed | ✅ Allowed | ✅ Allowed |
-| **Logged-in** | ✅ Allowed | ✅ Allowed | ❌ Denied | ❌ Denied |
-| **Guest** | ❌ Hidden | ❌ Denied | ❌ Denied | ❌ Denied |
+| User Type | View List | Use/Toggle (Personal) | Change Default Quality | Upload/Import Public | Delete/Modify Public |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Admin** | ✅ Allowed | ✅ Allowed | ✅ Allowed | ✅ Allowed | ✅ Allowed |
+| **Logged-in** | ✅ Allowed | ✅ Allowed | ✅ Allowed | ❌ Denied | ❌ Denied |
+| **Guest** | ❌ Hidden | ❌ Denied | ❌ Denied | ❌ Denied | ❌ Denied |
 
 ## 📱 Mobile Adaptation
 The Web Player is deeply optimized for mobile devices, providing a native App-like experience in mobile browsers.
@@ -244,7 +253,7 @@ Edit `config.js` directly. Environment variables take precedence:
 | `SUBSONIC_ENABLE` | `subsonic.enable` | Enable Subsonic protocol support | `true` |
 | `SUBSONIC_PATH` | `subsonic.path` | Subsonic access path | `/rest` |
 | `FRONTEND_PASSWORD` | `frontend.password` | Web dashboard password | `123456` |
-| `SERVER_NAME` | `serverName` | Sync service name | `My Sync Server` |
+| `SERVER_NAME` | `serverName` | Sync service name | `lxserver` |
 | `MAX_SNAPSHOT_NUM` | `maxSnapshotNum` | Max snapshots to keep | `10` |
 | `CONFIG_PATH` | - | Absolute path to external config file | - |
 | `DATA_PATH` | - | Absolute path to data storage directory | `./data` |
@@ -252,14 +261,19 @@ Edit `config.js` directly. Environment variables take precedence:
 | `PROXY_HEADER` | `proxy.header` | Proxy IP header (e.g., `x-real-ip`) | - |
 | `USER_ENABLE_ROOT` | `user.enableRoot` | Enable root path (use `ip:port`, password must be unique) | `false` |
 | `USER_ENABLE_PATH` | `user.enablePath` | Enable user path (use `ip:port/username`, passwords can repeat) | `true` |
+| `WEBDAV_ENABLE` | `webdav.enable` | Enable WebDAV sync and backup | `false` |
 | `WEBDAV_URL` | `webdav.url` | WebDAV URL | - |
 | `WEBDAV_USERNAME` | `webdav.username` | WebDAV Username | - |
 | `WEBDAV_PASSWORD` | `webdav.password` | WebDAV Password | - |
-| `SYNC_INTERVAL` | `sync.interval` | WebDAV auto-backup interval (min) | `60` |
+| `WEBDAV_SYNC_PATH` | `webdav.syncPath` | WebDAV remote sync path | `/lx-sync` |
+| `WEBDAV_BACKUP_PATH` | `webdav.backupPath` | WebDAV remote backup path | `/lx-sync-backups` |
+| `SYNC_INTERVAL` | `sync.interval` | WebDAV incremental sync interval (min) | `60` |
+| `BACKUP_INTERVAL` | `sync.backupInterval` | WebDAV full backup interval (hours) | `24` |
 | `ENABLE_WEBPLAYER_AUTH` | `player.enableAuth` | Enable Web Player password | `false` |
 | `WEBPLAYER_PASSWORD` | `player.password` | Web Player password | `123456` |
 | `DISABLE_TELEMETRY` | `disableTelemetry` | Disable anonymous telemetry and update notifications | `false` |
 | `ENABLE_PUBLIC_USER_RESTRICTION` | `user.enablePublicRestriction` | Enable public user permission restriction (restrict upload/delete public sources) | `true` |
+| `ENABLE_PUBLIC_FAVORITES` | `user.enablePublicFavorites` | Enable public favorites and songs (allows guest/public to view and play public favorites) | `false` |
 | `ENABLE_LOGIN_USER_CACHE_RESTRICTION` | `user.enableLoginCacheRestriction` | Enable cache settings restriction for logged-in non-admin users | `false` |
 | `ENABLE_CACHE_SIZE_LIMIT` | `user.enableCacheSizeLimit` | Enable cache size limit (auto-cleanup via LRU) | `false` |
 | `CACHE_SIZE_LIMIT` | `user.cacheSizeLimit` | Cache size limit in MB | `2000` |
@@ -268,6 +282,21 @@ Edit `config.js` directly. Environment variables take precedence:
 | `PROXY_ALL_ADDRESS` | `proxy.all.address` | Proxy address (supports http:// or socks5://) | - |
 | `SINGER_SOURCE_PRIORITY` | `singer.sourcePriority` | Singer info retrieval priority (e.g., `tx,wy` or `wy,tx`) | `tx,wy` |
 | `LX_USER_<username>` | `users` array | Quickly add a user, value is the password (e.g., `LX_USER_test=123`) | - |
+
+### Advanced Config Items (`config.js` Only)
+
+Some advanced options are only configurable by directly editing `config.js`:
+
+| Config Key | Description | Default |
+| --- | --- | --- |
+| `subsonic.enableDebug` | Enable Subsonic debug log mode | `true` |
+| `subsonic.onlineSearch` | Enable Subsonic online global search | `true` |
+| `subsonic.onlineSearchMode` | Subsonic online search mode (`fallback` / `merge` / `local_only`) | `"fallback"` |
+| `subsonic.onlineSearchSources` | Subsonic online search default platforms | `"wy,tx,kw,kg,mg"` |
+| `subsonic.lyricTranslation` | Include translation in Subsonic lyrics | `true` |
+| `artist.maxFetchPages` | Maximum fetch pages for artist songs | `20` |
+| `cache.namingPattern` | Cache file naming rule (`simple` / `custom`) | `"simple"` |
+| `system.allowUnsafeVM` | Allow VM mode custom source scripts (note security risks) | `false` |
 
 > **Note**: The service currently supports two types of sync connection URLs: `Root Path` (URL configuration is `ip:port`) and `User Path` (URL configuration is `ip:port/username`). If the User Path is disabled, all sync user passwords must be completely unique.
 
@@ -290,6 +319,24 @@ Anonymous telemetry via PostHog is used for:
 - Forked from [lyswhut/lx-music-sync-server](https://github.com/lyswhut/lx-music-sync-server).
 - Web player logic inspired by [lx-music-desktop](https://github.com/lyswhut/lx-music-desktop).
 - API based on `musicsdk`.
+
+### 👥 Contributors
+
+<a href="https://github.com/xcq0607/lxserver/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=xcq0607/lxserver" />
+</a>
+
+## 📈 Star History
+
+
+<a href="https://gitdata.xuanhun520.com/?repos=xcq0607/lxserver&type=Date">
+<picture >
+  <source media="(prefers-color-scheme: dark) and (max-width: 800px)" srcset="https://gitdata.xuanhun520.com/api/starimg?repos=xcq0607/lxserver&type=Date&theme=dark" />
+  <source  media="(prefers-color-scheme: light) and (max-width: 800px)" srcset="https://gitdata.xuanhun520.com/api/starimg?repos=xcq0607/lxserver&type=Date&theme=light" />
+  <img style="width: 800px; height: 533px;" alt="Star History Chart" src="https://gitdata.xuanhun520.com/api/starimg?repos=xcq0607/lxserver&type=Date&theme=dark" />
+</picture>
+</a>
+
 
 ---
 

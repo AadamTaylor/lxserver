@@ -485,6 +485,9 @@ export async function callUserApiGetMusicUrl(
     if (!normalizedSongInfo.trcUrl && songInfo.trcUrl) {
         normalizedSongInfo.trcUrl = songInfo.trcUrl
     }
+    if (typeof normalizedSongInfo.hash === 'string' && !normalizedSongInfo.hash) {
+        delete normalizedSongInfo.hash
+    }
 
     let supportedCount = 0;
     let lastError: Error | null = null;

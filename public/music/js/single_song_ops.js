@@ -163,6 +163,11 @@ async function deleteSingleSong(songId) {
         return;
     }
 
+    // 公开列表删除需要管理员权限
+    if (typeof requireAdminForOpenWrite === 'function') {
+        if (!(await requireAdminForOpenWrite('删除公开列表中的歌曲'))) return;
+    }
+
     const activeListId = getCurrentActiveListId();
     if (!activeListId || !currentListData) {
         showError('无法确定当前列表');
@@ -343,6 +348,22 @@ async function downloadSong(songOrId, forceQuality = null, suppressAlerts = fals
         return false;
     }
 
+    // 权限校验：公开受限模式下，如果管理员关闭了“缓存歌曲文件”功能，则下载/缓存歌曲需要验证管理员身份
+    const isPublic = !isUserLoggedIn() || !window.currentListData?.username || window.currentListData?.username === 'default' || window.currentListData?.username === '_open';
+    const enablePublicRestriction = window.lx_config?.['user.enablePublicRestriction'];
+    const isAdmin = !!localStorage.getItem('lx_admin_password');
+    const isServerCacheAllowed = window.settings?.enableServerCache === true;
+
+    if (isPublic && enablePublicRestriction && !isServerCacheAllowed && !isAdmin) {
+        showError('权限限制：管理员已关闭缓存歌曲功能，下载歌曲需要验证管理员身份。');
+        if (typeof window.handleAdminAuth === 'function') {
+            const authorized = await window.handleAdminAuth('管理员已关闭缓存歌曲文件功能，下载歌曲需要验证管理员身份');
+            if (!authorized) return false;
+        } else {
+            return false;
+        }
+    }
+
     const isOnlyDownload = window.settings?.enableOnlyDownloadMode === true;
     const actionLabel = isOnlyDownload ? '下载到服务器' : '缓存到服务器';
 
@@ -405,16 +426,10 @@ async function downloadSong(songOrId, forceQuality = null, suppressAlerts = fals
             targetQuality = availableQualities[selectedQualityIndex];
         }
 
-        // [新增] 权限校验：受限公开用户需要验证管理员
-        const isPublic = !window.currentListData?.username || window.currentListData?.username === 'default';
-        const enablePublicRestriction = window.lx_config?.['user.enablePublicRestriction'];
-        const isAdmin = !!localStorage.getItem('lx_admin_password');
-        const isServerCacheAllowed = window.settings?.enableServerCache === true;
-
-        if (isPublic && enablePublicRestriction && !isServerCacheAllowed && !isAdmin && !isOnlyDownload) {
+        if (isPublic && enablePublicRestriction && !isServerCacheAllowed && !isAdmin) {
             showError('权限限制：缓存到服务器需要验证管理员。');
             if (typeof window.handleAdminAuth === 'function') {
-                const authorized = await window.handleAdminAuth('缓存到服务器需要验证管理员身份或开启仅下载模式');
+                const authorized = await window.handleAdminAuth('缓存到服务器需要验证管理员身份');
                 if (!authorized) return false;
             } else {
                 return false;
@@ -449,6 +464,22 @@ async function batchDownloadSongs(songsToDownload, batchOptions = {}) {
     if (!Array.isArray(songsToDownload) || songsToDownload.length === 0) {
         showError(batchOptions.emptyMessage || '未找到要下载的歌曲');
         return false;
+    }
+
+    // 权限校验：公开受限模式下，如果管理员关闭了“缓存歌曲文件”功能，则批量下载/缓存歌曲需要验证管理员身份
+    const isPublic = !isUserLoggedIn() || !window.currentListData?.username || window.currentListData?.username === 'default' || window.currentListData?.username === '_open';
+    const enablePublicRestriction = window.lx_config?.['user.enablePublicRestriction'];
+    const isAdmin = !!localStorage.getItem('lx_admin_password');
+    const isServerCacheAllowed = window.settings?.enableServerCache === true;
+
+    if (isPublic && enablePublicRestriction && !isServerCacheAllowed && !isAdmin) {
+        showError('权限限制：管理员已关闭缓存歌曲功能，批量下载需要验证管理员身份。');
+        if (typeof window.handleAdminAuth === 'function') {
+            const authorized = await window.handleAdminAuth('管理员已关闭缓存歌曲文件功能，批量下载需要验证管理员身份');
+            if (!authorized) return false;
+        } else {
+            return false;
+        }
     }
 
     const clearSelection = batchOptions.clearSelection !== false;
@@ -506,17 +537,10 @@ async function batchDownloadSongs(songsToDownload, batchOptions = {}) {
         const selectedQualityIndex = qualityDisplayNames.indexOf(selectedQualityDisplay);
         const targetQuality = availableQualities[selectedQualityIndex];
 
-        // [新增] 权限校验：受限公开用户需要验证管理员
-        const isPublic = !window.currentListData?.username || window.currentListData?.username === 'default';
-        const enablePublicRestriction = window.lx_config?.['user.enablePublicRestriction'];
-        const isAdmin = !!localStorage.getItem('lx_admin_password');
-        const isServerCacheAllowed = window.settings?.enableServerCache === true;
-        const isOnlyDownload = window.settings?.enableOnlyDownloadMode === true;
-
-        if (isPublic && enablePublicRestriction && !isServerCacheAllowed && !isAdmin && !isOnlyDownload) {
+        if (isPublic && enablePublicRestriction && !isServerCacheAllowed && !isAdmin) {
             showError('权限限制：缓存到服务器需要验证管理员。');
             if (typeof window.handleAdminAuth === 'function') {
-                const authorized = await window.handleAdminAuth('缓存到服务器需要验证管理员身份或开启仅下载模式');
+                const authorized = await window.handleAdminAuth('缓存到服务器需要验证管理员身份');
                 if (!authorized) return false;
             } else {
                 return false;
