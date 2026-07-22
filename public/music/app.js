@@ -5618,7 +5618,7 @@ async function updateSetting(key, value) {
     if (SETTINGS_UI_MAP[key]?.normalize) {
         value = SETTINGS_UI_MAP[key].normalize(value);
     }
-    const restrictedKeys = ['enableServerCache', 'enableServerLyricCache', 'serverCacheLocation', 'serverCacheNamingPattern', 'enableOnlyDownloadMode', 'enableRemaster'];
+    const restrictedKeys = ['enableServerCache', 'enableServerLyricCache', 'serverCacheLocation', 'serverCacheNamingPattern', 'enableOnlyDownloadMode', 'enableRemaster', 'preferredQuality'];
     const isPublic = !currentListData?.username || currentListData?.username === 'default';
     const enablePublicRestriction = window.lx_config?.['user.enablePublicRestriction'];
     const enableLoginCacheRestriction = window.lx_config?.['user.enableLoginCacheRestriction'];
@@ -5631,7 +5631,7 @@ async function updateSetting(key, value) {
     );
 
     if (restrictedKeys.includes(key) && isRestricted) {
-        showError('权限不足：您的账号修改该项缓存设置受限，请先验证管理员。');
+        showError('权限不足：您的账号修改该设置项受限，请先验证管理员。');
         const authorized = await handleAdminAuth('该设置项受限，请输入管理员密码以修改');
         if (!authorized) {
             syncSettingsUI(key, settings[key]); // 还原 UI
@@ -5883,7 +5883,7 @@ function syncSettingsUI(key = null, value = null) {
     const enablePublicRestriction = window.lx_config?.['user.enablePublicRestriction'];
     const enableLoginCacheRestriction = window.lx_config?.['user.enableLoginCacheRestriction'];
     const isAdmin = !!localStorage.getItem('lx_admin_password');
-    const restrictedKeys = ['enableServerCache', 'enableServerLyricCache', 'serverCacheLocation', 'serverCacheNamingPattern', 'enableOnlyDownloadMode', 'enableRemaster'];
+    const restrictedKeys = ['enableServerCache', 'enableServerLyricCache', 'serverCacheLocation', 'serverCacheNamingPattern', 'enableOnlyDownloadMode', 'enableRemaster', 'preferredQuality'];
 
     const updateItem = (itemKey, itemValue, isSingle) => {
         const config = SETTINGS_UI_MAP[itemKey];

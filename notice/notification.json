@@ -18,25 +18,25 @@
         }
     },
     {
-        "comment": "=== 版本更新 v1.9.5 ===",
-        "id": "update_v1_9_5",
+        "comment": "=== 版本更新 v2.0.0 ===",
+        "id": "update_v2_0_0",
         "status": "active",
         "type": "version",
         "logic": {
-            "target_version": "v1.9.5",
+            "target_version": "v2.0.0",
             "operator": "<",
             "interval_hours": 24
         },
         "ui": {
-            "title": "发现新版本 v1.9.5",
-            "date": "2026-07-21",
-            "message": "本次更新包含关键修复：\n1. 🐛 播放器根路径路由修复 (#230)：修复在 Docker Compose 或配置文件中设置 PLAYER_PATH=/ 时引发的双斜杠 //login 判定异常及 302 无限重定向循环 Bug。\n2. 🔗 前端登出跳转优化：优化网页播放器登出时的重定向路径，自动根据配置的播放器路径进行匹配与跳转。",
-            "confirm_text": "立即查看",
+            "title": "发现新版本 v2.0.0",
+            "date": "2026-07-22",
+            "message": "本次更新包含核心重磅升级与多项问题修复：\n1. 🎵 本地音乐洗版与高品质音质体验 (@bobcc4)\n2. 🔄 WebDAV 增量同步与全量备份增强 (#262)\n3. 🔍 Subsonic 协议全网检索及接口适配 (#214, #228, #268)\n4. 🚀 歌单自动更新提醒、下载换源与大量逻辑修复",
+            "confirm_text": "查看日志",
             "cancel_text": "稍后提醒"
         },
         "action": {
             "type": "link",
-            "url": "https://github.com/XCQ0607/lxserver/releases/tag/v1.9.5"
+            "url": "https://github.com/XCQ0607/lxserver/releases/tag/v2.0.0"
         }
     }
 ]

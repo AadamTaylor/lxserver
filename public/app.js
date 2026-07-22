@@ -1721,6 +1721,9 @@ class App {
             }
 
             // WebDAV 配置
+            if (form.elements['webdav.enable']) {
+                form.elements['webdav.enable'].checked = config['webdav.enable'] === true;
+            }
             if (form.elements['webdav.url']) {
                 form.elements['webdav.url'].value = config['webdav.url'] || '';
             }
@@ -1730,8 +1733,17 @@ class App {
             if (form.elements['webdav.password']) {
                 form.elements['webdav.password'].value = config['webdav.password'] || '';
             }
+            if (form.elements['webdav.syncPath']) {
+                form.elements['webdav.syncPath'].value = config['webdav.syncPath'] || '/lx-sync';
+            }
+            if (form.elements['webdav.backupPath']) {
+                form.elements['webdav.backupPath'].value = config['webdav.backupPath'] || '/lx-sync-backups';
+            }
             if (form.elements['sync.interval']) {
                 form.elements['sync.interval'].value = config['sync.interval'] || 60;
+            }
+            if (form.elements['sync.backupInterval']) {
+                form.elements['sync.backupInterval'].value = config['sync.backupInterval'] || 24;
             }
 
             // URL路径配置
@@ -1820,10 +1832,14 @@ class App {
             'frontend.password': formData.get('frontend.password'),
             'player.enableAuth': formData.get('player.enableAuth') === 'on',
             'player.password': formData.get('player.password'),
+            'webdav.enable': formData.get('webdav.enable') === 'on',
             'webdav.url': formData.get('webdav.url'),
             'webdav.username': formData.get('webdav.username'),
             'webdav.password': formData.get('webdav.password'),
+            'webdav.syncPath': (formData.get('webdav.syncPath') || '').trim() || '/lx-sync',
+            'webdav.backupPath': (formData.get('webdav.backupPath') || '').trim() || '/lx-sync-backups',
             'sync.interval': parseInt(formData.get('sync.interval')) || 60,
+            'sync.backupInterval': parseInt(formData.get('sync.backupInterval')) || 24,
             'admin.path': adminPath,
             'player.path': playerPath,
             'subsonic.enable': formData.get('subsonic.enable') === 'on',

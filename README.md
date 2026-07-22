@@ -8,7 +8,7 @@
   <h1>LX Sync Server</h1> -->
   <p>
     <img src="https://img.shields.io/badge/build-passing-brightgreen?style=flat-square" alt="Build Status">
-    <img src="https://img.shields.io/badge/version-v1.9.5-blue?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/version-v2.0.0-blue?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/node-%3E%3D16-green?style=flat-square" alt="Node Version">
     <img src="https://img.shields.io/github/license/XCQ0607/lxserver?style=flat-square" alt="License">
     <br>
@@ -129,13 +129,13 @@
 2. **Web 界面配置**：
    登录管理后台（默认端口 9527），进入 **"系统配置"**，勾选 **"启用 Web 播放器访问密码"** 并设置密码。
 
-### 自定义源权限矩阵 (当 `user.enablePublicRestriction` 开启时)
+### 权限与公开源限制矩阵 (当 `user.enablePublicRestriction` 开启时)
 
-| 用户类型             | 查看列表 | 使用/切换(仅个人) | 上传/导入公开源 | 删除/修改公开源 |
-| :------------------- | :------- | :---------------- | :-------------- | :-------------- |
-| **管理员**     | ✅ 允许  | ✅ 允许           | ✅ 允许         | ✅ 允许         |
-| **已登录用户** | ✅ 允许  | ✅ 允许           | ❌ 禁止         | ❌ 禁止         |
-| **未登录访客** | ❌ 隐藏  | ❌ 禁止           | ❌ 禁止         | ❌ 禁止         |
+| 用户类型             | 查看列表 | 使用/切换(仅个人) | 修改默认音质 | 上传/导入公开源 | 删除/修改公开源 |
+| :------------------- | :------- | :---------------- | :----------- | :-------------- | :-------------- |
+| **管理员**     | ✅ 允许  | ✅ 允许           | ✅ 允许      | ✅ 允许         | ✅ 允许         |
+| **已登录用户** | ✅ 允许  | ✅ 允许           | ✅ 允许      | ❌ 禁止         | ❌ 禁止         |
+| **未登录访客** | ❌ 隐藏  | ❌ 禁止           | ❌ 禁止      | ❌ 禁止         | ❌ 禁止         |
 
 ## 📱 移动端适配
 
@@ -262,12 +262,16 @@ npm start
 | `PROXY_HEADER`                        | `proxy.header`                     | 代理转发 IP 头 (如 `x-real-ip`)                                  | -                  |
 | `USER_ENABLE_ROOT`                    | `user.enableRoot`                  | 启用根路径 (开启后连接URL即为 `ip:port`，不允许不同用户密码相同) | `false`          |
 | `USER_ENABLE_PATH`                    | `user.enablePath`                  | 启用用户路径 (开启后连接URL需为 `ip:port/用户名`，允许密码相同)  | `true`           |
+| `WEBDAV_ENABLE`                       | `webdav.enable`                    | 是否启用 WebDAV 同步与备份                                         | `false`          |
 | `WEBDAV_URL`                          | `webdav.url`                       | WebDAV 地址                                                        | -                  |
 | `WEBDAV_USERNAME`                     | `webdav.username`                  | WebDAV 用户名                                                      | -                  |
 | `WEBDAV_PASSWORD`                     | `webdav.password`                  | WebDAV 密码                                                        | -                  |
-| `SYNC_INTERVAL`                       | `sync.interval`                    | WebDAV 自动备份间隔(分钟)                                          | `60`             |
+| `WEBDAV_SYNC_PATH`                    | `webdav.syncPath`                  | WebDAV 增量同步远端路径                                            | `/lx-sync`         |
+| `WEBDAV_BACKUP_PATH`                  | `webdav.backupPath`                | WebDAV 全量备份远端路径                                            | `/lx-sync-backups` |
+| `SYNC_INTERVAL`                       | `sync.interval`                    | WebDAV 增量同步检测间隔(分钟)                                      | `60`             |
+| `BACKUP_INTERVAL`                     | `sync.backupInterval`              | WebDAV 全量备份间隔(小时)                                          | `24`             |
 | `ENABLE_WEBPLAYER_AUTH`               | `player.enableAuth`                | 是否启用 Web 播放器访问密码                                        | `false`          |
-| `WEBPLAYER_PASSWORD`                  | `player.password`                  | Web 播放器访问密码                                                 | 123456             |
+| `WEBPLAYER_PASSWORD`                  | `player.password`                  | Web 播放器访问密码                                                 | `123456`         |
 | `DISABLE_TELEMETRY`                   | `disableTelemetry`                 | 是否禁用匿名数据统计，系统更新提示以及系统公告提示                 | `false`          |
 | `ENABLE_PUBLIC_USER_RESTRICTION`      | `user.enablePublicRestriction`     | 是否启用公开用户权限限制 (限制上传、删除公开源、缓存到服务器等)    | `true`           |
 | `ENABLE_LOGIN_USER_CACHE_RESTRICTION` | `user.enableLoginCacheRestriction` | 是否启用登录用户缓存限制 (开启后限非管理员登录用户的缓存设置)      | `false`          |
@@ -307,17 +311,17 @@ npm start
   <img src="https://contrib.rocks/image?repo=xcq0607/lxserver" />
 </a>
 
-Made with [contrib.rocks](https://contrib.rocks).
 
 ## 📈 Star History
 
-<a href="https://star-history.com/#XCQ0607/lxserver&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=XCQ0607/lxserver&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=XCQ0607/lxserver&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=XCQ0607/lxserver&type=Date" />
-  </picture>
+<a href="https://www.star-history.com/?repos=xcq0607%2Flxserver&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=xcq0607/lxserver&type=date&theme=dark&legend=top-left&sealed_token=Z2mlyexaXrM46HCiWNUO4W6uMjAiHVrtn_1s3nt7mydTkOR_TpRaPm63IstjtaIu3AZJjSzZTfq9csTxYSHxq14X9xqNDkO21ZG_D3ZF1XcGSB1M8IR0qA" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=xcq0607/lxserver&type=date&legend=top-left&sealed_token=Z2mlyexaXrM46HCiWNUO4W6uMjAiHVrtn_1s3nt7mydTkOR_TpRaPm63IstjtaIu3AZJjSzZTfq9csTxYSHxq14X9xqNDkO21ZG_D3ZF1XcGSB1M8IR0qA" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=xcq0607/lxserver&type=date&legend=top-left&sealed_token=Z2mlyexaXrM46HCiWNUO4W6uMjAiHVrtn_1s3nt7mydTkOR_TpRaPm63IstjtaIu3AZJjSzZTfq9csTxYSHxq14X9xqNDkO21ZG_D3ZF1XcGSB1M8IR0qA" />
+ </picture>
 </a>
+
 
 ## 📄 开源协议
 

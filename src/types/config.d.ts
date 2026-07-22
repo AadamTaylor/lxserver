@@ -106,6 +106,11 @@ declare namespace LX {
     'frontend.password'?: string
 
     /**
+     * 是否启用 WebDAV 同步服务
+     */
+    'webdav.enable'?: boolean
+
+    /**
      * WebDAV URL
      */
     'webdav.url'?: string
@@ -121,9 +126,24 @@ declare namespace LX {
     'webdav.password'?: string
 
     /**
+     * WebDAV 增量同步远端路径（默认 /lx-sync）
+     */
+    'webdav.syncPath'?: string
+
+    /**
+     * WebDAV 全量备份远端路径（默认 /lx-sync-backups）
+     */
+    'webdav.backupPath'?: string
+
+    /**
      * 同步间隔(分钟)
      */
     'sync.interval'?: number
+
+    /**
+     * 全量备份间隔(小时)，默认 24
+     */
+    'sync.backupInterval'?: number
 
     /**
      * 是否开启Web播放器访问密码

@@ -29,10 +29,14 @@ const config: LX.Config = {
   'frontend.password': '123456',
 
   // WebDAV 配置
+  'webdav.enable': false,
   'webdav.url': '',
   'webdav.username': '',
   'webdav.password': '',
+  'webdav.syncPath': '/lx-sync', // 增量同步远程路径
+  'webdav.backupPath': '/lx-sync-backups', // 全量备份远程路径
   'sync.interval': 60, // 同步间隔（分钟）默认1小时
+  'sync.backupInterval': 24, // 全量备份间隔（小时）默认24小时
 
   // Web播放器配置
   'player.enableAuth': false,

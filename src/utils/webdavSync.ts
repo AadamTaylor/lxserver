@@ -7,10 +7,14 @@ import { EventEmitter } from 'events'
 import { PassThrough } from 'stream'
 
 interface WebDAVConfig {
+    enable?: boolean
     url: string
     username: string
     password: string
+    syncPath?: string
+    backupPath?: string
     interval?: number
+    backupInterval?: number
 }
 
 interface SyncLog {
@@ -21,49 +25,74 @@ interface SyncLog {
     message?: string
 }
 
+const normalizeRemotePath = (p?: string, defaultPath: string = ''): string => {
+    let str = (p || '').trim()
+    if (!str) str = defaultPath
+    if (!str.startsWith('/')) str = '/' + str
+    return str.replace(/\/+$/, '')
+}
+
 class WebDAVSync extends EventEmitter {
     private config: WebDAVConfig
     private dataPath: string
-    private syncInterval: number
-    private watchInterval: number = 60000 // 1分钟检查一次文件变化
-    private backupInterval: number = 24 * 60 * 60 * 1000 // 24小时
+    private syncPath: string
+    private backupPath: string
+    private syncInterval: number // 文件增量变化检测与同步间隔（毫秒）
+    private backupInterval: number // 全量备份间隔（毫秒）
     private watchTimer: NodeJS.Timeout | null = null
     private backupTimer: NodeJS.Timeout | null = null
     private filesHash: Map<string, string> = new Map()
     private syncLogs: SyncLog[] = []
     private client: any = null
+    private initPromise: Promise<boolean> | null = null
+    private ensuredDirs: Set<string> = new Set()
 
     constructor(config: WebDAVConfig, dataPath: string) {
         super()
+        this.syncPath = normalizeRemotePath(config.syncPath, '/lx-sync')
+        this.backupPath = normalizeRemotePath(config.backupPath, '/lx-sync-backups')
         this.config = {
+            enable: config.enable ?? false,
             url: config.url || '',
             username: config.username || '',
             password: config.password || '',
+            syncPath: this.syncPath,
+            backupPath: this.backupPath,
         }
         this.syncInterval = (config.interval || 60) * 60 * 1000
+        this.backupInterval = (config.backupInterval || 24) * 60 * 60 * 1000
         this.dataPath = dataPath
     }
 
-    async initClient() {
+    async initClient(force = false): Promise<boolean> {
         if (!this.isConfigured()) return false
+        if (this.client && !force) return true
+        if (this.initPromise) return this.initPromise
 
-        try {
-            // 动态导入 webdav ESM 模块
-            const { createClient } = await import('webdav')
-            this.client = createClient(this.config.url, {
-                username: this.config.username,
-                password: this.config.password,
-            })
-            console.log('WebDAV client initialized')
-            return true
-        } catch (err) {
-            console.error('Failed to initialize WebDAV client:', err)
-            return false
-        }
+        this.initPromise = (async () => {
+            try {
+                // 动态导入 webdav ESM 模块
+                const { createClient } = await import('webdav')
+                const options: any = {}
+                if (this.config.username) options.username = this.config.username
+                if (this.config.password) options.password = this.config.password
+                this.client = createClient(this.config.url, options)
+                console.log('WebDAV client initialized')
+                return true
+            } catch (err) {
+                console.error('Failed to initialize WebDAV client:', err)
+                this.client = null
+                return false
+            } finally {
+                this.initPromise = null
+            }
+        })()
+
+        return this.initPromise
     }
 
     isConfigured(): boolean {
-        return !!(this.config.url && this.config.username && this.config.password)
+        return !!(this.config.enable && this.config.url && this.config.url.trim() !== '')
     }
 
     private addLog(log: SyncLog) {
@@ -139,12 +168,41 @@ class WebDAVSync extends EventEmitter {
         return { changed, deleted }
     }
 
+    private getRelativeRemotePath(remoteFilename: string): string {
+        const prefix = this.syncPath.endsWith('/') ? this.syncPath : this.syncPath + '/'
+        if (remoteFilename.startsWith(prefix)) {
+            return remoteFilename.slice(prefix.length)
+        }
+        if (remoteFilename.startsWith(this.syncPath)) {
+            return remoteFilename.slice(this.syncPath.length).replace(/^\/+/, '')
+        }
+        return remoteFilename.replace(/^\/+/, '')
+    }
+
+    private async runConcurrent<T, R>(
+        items: T[],
+        concurrency: number,
+        fn: (item: T, index: number) => Promise<R>
+    ): Promise<R[]> {
+        if (items.length === 0) return []
+        const results: R[] = new Array(items.length)
+        let index = 0
+        const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+            while (index < items.length) {
+                const currentIndex = index++
+                results[currentIndex] = await fn(items[currentIndex], currentIndex)
+            }
+        })
+        await Promise.all(workers)
+        return results
+    }
+
     async deleteRemoteFile(relativePath: string): Promise<boolean> {
         if (!this.client) await this.initClient()
         if (!this.client) return false
 
         try {
-            const remotePath = `/lx-sync/${relativePath.replace(/\\/g, '/')}`
+            const remotePath = `${this.syncPath}/${relativePath.replace(/\\/g, '/')}`
             await this.client.deleteFile(remotePath)
             this.addLog({
                 timestamp: Date.now(),
@@ -172,11 +230,14 @@ class WebDAVSync extends EventEmitter {
             if (!fs.existsSync(localPath)) return false
 
             const stat = fs.statSync(localPath)
-            const remotePath = `/lx-sync/${relativePath.replace(/\\/g, '/')}`
+            const remotePath = `${this.syncPath}/${relativePath.replace(/\\/g, '/')}`
 
-            // 确保远程目录存在
+            // 缓存已创建过的远程目录，避免每个文件重复发送 createDirectory 请求
             const remoteDir = path.dirname(remotePath)
-            await this.client.createDirectory(remoteDir, { recursive: true })
+            if (!this.ensuredDirs.has(remoteDir)) {
+                await this.client.createDirectory(remoteDir, { recursive: true })
+                this.ensuredDirs.add(remoteDir)
+            }
 
             // 使用流式上传并监控进度
             const readStream = fs.createReadStream(localPath)
@@ -216,6 +277,7 @@ class WebDAVSync extends EventEmitter {
             })
             return true
         } catch (err: any) {
+            console.error(`[WebDAV] Failed to upload file ${relativePath}:`, err.message)
             this.emit('progress', {
                 type: 'file',
                 status: 'error',
@@ -238,7 +300,7 @@ class WebDAVSync extends EventEmitter {
         if (!this.client) return false
 
         try {
-            const remotePath = `/lx-sync/${relativePath.replace(/\\/g, '/')}`
+            const remotePath = `${this.syncPath}/${relativePath.replace(/\\/g, '/')}`
             const isRootConfig = relativePath === 'config.js'
             const localPath = isRootConfig ? path.join(process.cwd(), 'config.js') : path.join(this.dataPath, relativePath)
 
@@ -277,6 +339,7 @@ class WebDAVSync extends EventEmitter {
             })
             return true
         } catch (err: any) {
+            console.error(`[WebDAV] Failed to download file ${relativePath}:`, err.message)
             this.addLog({
                 timestamp: Date.now(),
                 type: 'download',
@@ -357,7 +420,7 @@ class WebDAVSync extends EventEmitter {
 
             const zipPath = path.join(this.dataPath, zipName)
             const stat = fs.statSync(zipPath)
-            const remotePath = `/lx-sync-backups/${zipName}`
+            const remotePath = `${this.backupPath}/${zipName}`
 
             // 使用流式上传并监控进度
             const readStream = fs.createReadStream(zipPath)
@@ -384,29 +447,32 @@ class WebDAVSync extends EventEmitter {
 
             readStream.pipe(passThrough)
 
-            await this.client.putFileContents(remotePath, passThrough)
-
-            this.emit('progress', {
-                type: 'backup',
-                status: 'success',
-                file: zipName,
-                total: stat.size,
-                current: stat.size
-            })
-
-            // 记录成功日志
-            this.addLog({
-                timestamp: Date.now(),
-                type: 'backup',
-                file: zipName,
-                status: 'success',
-            })
-
-            // 清理本地zip
             try {
-                fs.unlinkSync(zipPath)
-            } catch (e) {
-                console.error('Failed to cleanup local backup zip:', e)
+                await this.client.putFileContents(remotePath, passThrough)
+
+                this.emit('progress', {
+                    type: 'backup',
+                    status: 'success',
+                    file: zipName,
+                    total: stat.size,
+                    current: stat.size
+                })
+
+                this.addLog({
+                    timestamp: Date.now(),
+                    type: 'backup',
+                    file: zipName,
+                    status: 'success',
+                })
+            } finally {
+                // 确保无论上传成功还是失败，总是及时清理本地临时 zip 文件
+                if (fs.existsSync(zipPath)) {
+                    try {
+                        fs.unlinkSync(zipPath)
+                    } catch (e) {
+                        console.error('Failed to cleanup local backup zip:', e)
+                    }
+                }
             }
 
             // 清理旧备份（保留最近5个）
@@ -442,7 +508,11 @@ class WebDAVSync extends EventEmitter {
 
             this.emit('progress', { type: 'sync', status: 'start', total })
 
-            for (const file of fileList) {
+            let successCount = 0
+            let failCount = 0
+
+            // 使用受控并发（最多 5 个并发连接）加速批量文件上传
+            await this.runConcurrent(fileList, 5, async (file) => {
                 count++
                 this.emit('progress', {
                     type: 'sync',
@@ -451,25 +521,49 @@ class WebDAVSync extends EventEmitter {
                     total,
                     file
                 })
-                await this.uploadFile(file)
-            }
+                const ok = await this.uploadFile(file)
+                if (ok) successCount++
+                else failCount++
+            })
 
             this.emit('progress', { type: 'sync', status: 'finish', total })
-            return true
+            if (failCount > 0) {
+                console.warn(`[WebDAV] Sync all files finished with errors: ${successCount} succeeded, ${failCount} failed.`)
+            } else {
+                console.log(`[WebDAV] Sync all files finished successfully (${successCount} files).`)
+            }
+            return failCount === 0
         } catch (err) {
             console.error('Sync all files failed:', err)
             return false
         }
     }
 
+    private parseBackupTime(item: any): number {
+        if (item.lastmod) {
+            const parsed = Date.parse(item.lastmod)
+            if (!isNaN(parsed)) return parsed
+        }
+        const match = item.basename?.match(/lx-sync-backup-(.+?)\.zip$/)
+        if (match && match[1]) {
+            const parts = match[1].split('T')
+            if (parts.length === 2) {
+                const timeStr = parts[1].replace(/(\d{2})-(\d{2})-(\d{2})-(\d{3}Z)/, '$1:$2:$3.$4')
+                const parsed = Date.parse(`${parts[0]}T${timeStr}`)
+                if (!isNaN(parsed)) return parsed
+            }
+        }
+        return 0
+    }
+
     async cleanOldBackups() {
         if (!this.client) return
 
         try {
-            const items = await this.client.getDirectoryContents('/lx-sync-backups/')
+            const items = await this.client.getDirectoryContents(`${this.backupPath}/`)
             const backups = items
                 .filter((item: any) => item.basename.startsWith('lx-sync-backup-'))
-                .sort((a: any, b: any) => b.lastmod.localeCompare(a.lastmod))
+                .sort((a: any, b: any) => this.parseBackupTime(b) - this.parseBackupTime(a))
 
             // 删除第6个及以后的备份
             for (let i = 5; i < backups.length; i++) {
@@ -487,10 +581,10 @@ class WebDAVSync extends EventEmitter {
         try {
             this.emit('progress', { type: 'restore', status: 'start', message: '正在获取备份列表...' })
 
-            const items = await this.client.getDirectoryContents('/lx-sync-backups/')
+            const items = await this.client.getDirectoryContents(`${this.backupPath}/`)
             const backups = items
                 .filter((item: any) => item.basename.startsWith('lx-sync-backup-'))
-                .sort((a: any, b: any) => b.lastmod.localeCompare(a.lastmod))
+                .sort((a: any, b: any) => this.parseBackupTime(b) - this.parseBackupTime(a))
 
             if (backups.length === 0) return false
 
@@ -564,9 +658,14 @@ class WebDAVSync extends EventEmitter {
         if (changed.length === 0 && deleted.length === 0) return
 
         if (changed.length > 0) {
-            console.log(`Syncing ${changed.length} changed files...`)
-            for (const file of changed) {
-                await this.uploadFile(file)
+            console.log(`Syncing ${changed.length} changed files to WebDAV...`)
+            let failCount = 0
+            await this.runConcurrent(changed, 5, async (file) => {
+                const ok = await this.uploadFile(file)
+                if (!ok) failCount++
+            })
+            if (failCount > 0) {
+                console.error(`[WebDAV] Sync changed files completed with ${failCount} errors out of ${changed.length} files.`)
             }
         }
 
@@ -584,21 +683,24 @@ class WebDAVSync extends EventEmitter {
 
         // 1. 尝试恢复散文件
         try {
-            const items = await this.client.getDirectoryContents('/lx-sync/', { deep: true })
+            const items = await this.client.getDirectoryContents(`${this.syncPath}/`, { deep: true })
             const files = items.filter((item: any) => item.type === 'file')
 
             if (files.length > 0) {
-                console.log(`Restoring ${files.length} files from WebDAV...`)
+                console.log(`Restoring ${files.length} files from WebDAV (${this.syncPath})...`)
                 const total = files.length
                 let current = 0
                 let hasConfig = false
 
                 this.emit('progress', { type: 'restore', status: 'start', total, message: '开始从云端恢复数据...' })
 
+                const remoteFileSet = new Set<string>()
+
                 for (const file of files) {
                     current++
-                    const relativePath = file.filename.replace('/lx-sync/', '')
+                    const relativePath = this.getRelativeRemotePath(file.filename)
                     if (relativePath === 'config.js') hasConfig = true
+                    remoteFileSet.add(relativePath)
 
                     this.emit('progress', {
                         type: 'restore',
@@ -621,12 +723,27 @@ class WebDAVSync extends EventEmitter {
                     await this.uploadFile('config.js')
                 }
 
+                // 双向数据一致性补齐：检查本地是否存在但云端缺失的文件，自动补传至云端
+                const localFiles = await this.scanFiles()
+                const missingOnRemote: string[] = []
+                for (const relativePath of localFiles.keys()) {
+                    if (!remoteFileSet.has(relativePath)) {
+                        missingOnRemote.push(relativePath)
+                    }
+                }
+                if (missingOnRemote.length > 0) {
+                    console.log(`[WebDAV] Found ${missingOnRemote.length} local files missing on cloud, uploading missing files...`)
+                    for (const file of missingOnRemote) {
+                        await this.uploadFile(file)
+                    }
+                }
+
                 this.emit('progress', { type: 'restore', status: 'finish', total, message: '数据恢复完成' })
                 return true
             }
         } catch (err: any) {
-            // 忽略 /lx-sync/ 不存在的错误，继续尝试恢复备份
-            console.log('Scattered files not found or error, trying backup...', err.message)
+            // 忽略远程同步目录不存在的错误，继续尝试恢复备份
+            console.log(`Scattered files not found at ${this.syncPath} or error, trying backup...`, err.message)
         }
 
         // 2. 尝试恢复备份
@@ -648,17 +765,20 @@ class WebDAVSync extends EventEmitter {
                 return true
             } else {
                 // 如果未找到散文件也未找到备份，说明是第一次配置或云端为空
-                // 主动上传当前的 config.js 到云端进行初始化
-                console.log('Cloud is empty, saving current config and uploading to initialize /lx-sync/...')
-                this.emit('progress', { type: 'restore', status: 'processing', message: '云端为空，正在上传本地配置初始化...' })
+                // 主动全量上传本地所有文件到云端进行初始化（后台异步执行，不阻塞启动）
+                console.log(`Cloud is empty, saving current config and uploading all files to initialize ${this.syncPath}...`)
+                this.emit('progress', { type: 'restore', status: 'processing', message: '云端为空，正在后台同步本地全部数据到云端...' })
 
                 // 保存当前内存中的配置（包含环境变量生效后的结果）到磁盘
                 if (global.lx && global.lx.saveConfig) {
                     global.lx.saveConfig()
                 }
 
-                await this.uploadFile('config.js')
-                this.emit('progress', { type: 'restore', status: 'finish', message: '云端配置同步完成' })
+                void this.syncAllFiles().then((res) => {
+                    if (res) {
+                        this.emit('progress', { type: 'restore', status: 'finish', message: '云端配置与全部数据初始化完成' })
+                    }
+                })
                 return false
             }
         } catch (err: any) {
@@ -670,14 +790,16 @@ class WebDAVSync extends EventEmitter {
 
     async testConnection(): Promise<{ success: boolean; message: string }> {
         // 检查配置是否完整
-        if (!this.isConfigured()) {
-            const missing = [];
-            if (!this.config.url) missing.push('WebDAV URL');
-            if (!this.config.username) missing.push('用户名');
-            if (!this.config.password) missing.push('密码');
+        if (!this.config.enable) {
             return {
                 success: false,
-                message: `请先在系统配置中填写: ${missing.join('、')}`
+                message: '请先在系统配置中启用 WebDAV 同步服务'
+            };
+        }
+        if (!this.config.url || this.config.url.trim() === '') {
+            return {
+                success: false,
+                message: '请先在系统配置中填写 WebDAV 服务器地址 (URL)'
             };
         }
 
@@ -687,7 +809,16 @@ class WebDAVSync extends EventEmitter {
                 return { success: false, message: 'WebDAV客户端初始化失败，请检查配置是否正确' };
             }
 
-            await this.client.getDirectoryContents('/');
+            // 增加 10 秒超时控制，避免请求无限挂起
+            const timeoutPromise = new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error('连接超时，请检查 WebDAV 地址及网络连接')), 10000)
+            )
+
+            await Promise.race([
+                this.client.getDirectoryContents('/'),
+                timeoutPromise
+            ])
+
             return { success: true, message: '连接成功！WebDAV配置正确' };
         } catch (err: any) {
             let errorMsg = '连接失败';
@@ -709,6 +840,9 @@ class WebDAVSync extends EventEmitter {
     startAutoSync() {
         if (!this.isConfigured()) return
 
+        // 避免重复启动定时器
+        this.stopAutoSync()
+
         console.log('Starting auto file change detection...')
 
         // 初始化文件哈希
@@ -716,10 +850,10 @@ class WebDAVSync extends EventEmitter {
             this.filesHash = files
         })
 
-        // 每分钟检查文件变化
+        // 按配置的时间间隔检查增量文件变化
         this.watchTimer = setInterval(() => {
             void this.syncChangedFiles()
-        }, this.watchInterval)
+        }, this.syncInterval)
 
         // 每24小时创建备份（如果有变化）
         this.backupTimer = setInterval(() => {
@@ -740,17 +874,57 @@ class WebDAVSync extends EventEmitter {
     }
 
     updateConfig(config: Partial<WebDAVConfig>) {
-        if (config.url) this.config.url = config.url
-        if (config.username) this.config.username = config.username
-        if (config.password) this.config.password = config.password
-        if (config.interval) this.syncInterval = config.interval * 60 * 1000
+        let changed = false
+        if (config.enable !== undefined && config.enable !== this.config.enable) {
+            this.config.enable = config.enable
+            changed = true
+        }
+        if (config.url !== undefined && config.url !== this.config.url) {
+            this.config.url = config.url
+            changed = true
+        }
+        if (config.username !== undefined && config.username !== this.config.username) {
+            this.config.username = config.username
+            changed = true
+        }
+        if (config.password !== undefined && config.password !== this.config.password) {
+            this.config.password = config.password
+            changed = true
+        }
+        if (config.syncPath !== undefined) {
+            const newSyncPath = normalizeRemotePath(config.syncPath, '/lx-sync')
+            if (newSyncPath !== this.syncPath) {
+                this.syncPath = newSyncPath
+                this.config.syncPath = newSyncPath
+                changed = true
+            }
+        }
+        if (config.backupPath !== undefined) {
+            const newBackupPath = normalizeRemotePath(config.backupPath, '/lx-sync-backups')
+            if (newBackupPath !== this.backupPath) {
+                this.backupPath = newBackupPath
+                this.config.backupPath = newBackupPath
+                changed = true
+            }
+        }
+        if (config.interval !== undefined && (config.interval * 60 * 1000) !== this.syncInterval) {
+            this.syncInterval = config.interval * 60 * 1000
+            changed = true
+        }
+        if (config.backupInterval !== undefined && (config.backupInterval * 60 * 60 * 1000) !== this.backupInterval) {
+            this.backupInterval = config.backupInterval * 60 * 60 * 1000
+            changed = true
+        }
 
-        if (this.isConfigured()) {
+        if (changed) {
             this.client = null
+            this.ensuredDirs.clear()
             this.stopAutoSync()
-            void this.initClient().then(() => {
-                this.startAutoSync()
-            })
+            if (this.isConfigured()) {
+                void this.initClient(true).then(() => {
+                    this.startAutoSync()
+                })
+            }
         }
     }
 }

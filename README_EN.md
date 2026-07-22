@@ -5,7 +5,7 @@
 <div align="center">
   <p>
     <img src="https://img.shields.io/badge/build-passing-brightgreen?style=flat-square" alt="Build Status">
-    <img src="https://img.shields.io/badge/version-v1.9.5-blue?style=flat-square" alt="Version">
+    <img src="https://img.shields.io/badge/version-v2.0.0-blue?style=flat-square" alt="Version">
     <img src="https://img.shields.io/badge/node-%3E%3D16-green?style=flat-square" alt="Node Version">
     <img src="https://img.shields.io/github/license/XCQ0607/lxserver?style=flat-square" alt="License">
     <br>
@@ -118,13 +118,13 @@ To protect your privacy, the Web Player supports password protection.
 2. **Web Interface**:
    Log in to the management dashboard (default port 9527), go to **"System Config"**, check **"Enable Web Player Password"** and set your password.
 
-### Custom Source Permission Matrix (when `user.enablePublicRestriction` is enabled)
+### Permission & Custom Source Matrix (when `user.enablePublicRestriction` is enabled)
 
-| User Type | View List | Use/Toggle (Personal) | Upload/Import Public | Delete/Modify Public |
-| :--- | :--- | :--- | :--- | :--- |
-| **Admin** | ✅ Allowed | ✅ Allowed | ✅ Allowed | ✅ Allowed |
-| **Logged-in** | ✅ Allowed | ✅ Allowed | ❌ Denied | ❌ Denied |
-| **Guest** | ❌ Hidden | ❌ Denied | ❌ Denied | ❌ Denied |
+| User Type | View List | Use/Toggle (Personal) | Change Default Quality | Upload/Import Public | Delete/Modify Public |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Admin** | ✅ Allowed | ✅ Allowed | ✅ Allowed | ✅ Allowed | ✅ Allowed |
+| **Logged-in** | ✅ Allowed | ✅ Allowed | ✅ Allowed | ❌ Denied | ❌ Denied |
+| **Guest** | ❌ Hidden | ❌ Denied | ❌ Denied | ❌ Denied | ❌ Denied |
 
 ## 📱 Mobile Adaptation
 The Web Player is deeply optimized for mobile devices, providing a native App-like experience in mobile browsers.
@@ -252,10 +252,14 @@ Edit `config.js` directly. Environment variables take precedence:
 | `PROXY_HEADER` | `proxy.header` | Proxy IP header (e.g., `x-real-ip`) | - |
 | `USER_ENABLE_ROOT` | `user.enableRoot` | Enable root path (use `ip:port`, password must be unique) | `false` |
 | `USER_ENABLE_PATH` | `user.enablePath` | Enable user path (use `ip:port/username`, passwords can repeat) | `true` |
+| `WEBDAV_ENABLE` | `webdav.enable` | Enable WebDAV sync and backup | `false` |
 | `WEBDAV_URL` | `webdav.url` | WebDAV URL | - |
 | `WEBDAV_USERNAME` | `webdav.username` | WebDAV Username | - |
 | `WEBDAV_PASSWORD` | `webdav.password` | WebDAV Password | - |
-| `SYNC_INTERVAL` | `sync.interval` | WebDAV auto-backup interval (min) | `60` |
+| `WEBDAV_SYNC_PATH` | `webdav.syncPath` | WebDAV remote sync path | `/lx-sync` |
+| `WEBDAV_BACKUP_PATH` | `webdav.backupPath` | WebDAV remote backup path | `/lx-sync-backups` |
+| `SYNC_INTERVAL` | `sync.interval` | WebDAV incremental sync interval (min) | `60` |
+| `BACKUP_INTERVAL` | `sync.backupInterval` | WebDAV full backup interval (hours) | `24` |
 | `ENABLE_WEBPLAYER_AUTH` | `player.enableAuth` | Enable Web Player password | `false` |
 | `WEBPLAYER_PASSWORD` | `player.password` | Web Player password | `123456` |
 | `DISABLE_TELEMETRY` | `disableTelemetry` | Disable anonymous telemetry and update notifications | `false` |
@@ -297,7 +301,15 @@ Anonymous telemetry via PostHog is used for:
   <img src="https://contrib.rocks/image?repo=xcq0607/lxserver" />
 </a>
 
-Made with [contrib.rocks](https://contrib.rocks).
+## 📈 Star History
+
+<a href="https://www.star-history.com/?repos=xcq0607%2Flxserver&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=xcq0607/lxserver&type=date&theme=dark&legend=top-left&sealed_token=Z2mlyexaXrM46HCiWNUO4W6uMjAiHVrtn_1s3nt7mydTkOR_TpRaPm63IstjtaIu3AZJjSzZTfq9csTxYSHxq14X9xqNDkO21ZG_D3ZF1XcGSB1M8IR0qA" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=xcq0607/lxserver&type=date&legend=top-left&sealed_token=Z2mlyexaXrM46HCiWNUO4W6uMjAiHVrtn_1s3nt7mydTkOR_TpRaPm63IstjtaIu3AZJjSzZTfq9csTxYSHxq14X9xqNDkO21ZG_D3ZF1XcGSB1M8IR0qA" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=xcq0607/lxserver&type=date&legend=top-left&sealed_token=Z2mlyexaXrM46HCiWNUO4W6uMjAiHVrtn_1s3nt7mydTkOR_TpRaPm63IstjtaIu3AZJjSzZTfq9csTxYSHxq14X9xqNDkO21ZG_D3ZF1XcGSB1M8IR0qA" />
+ </picture>
+</a>
 
 ---
 

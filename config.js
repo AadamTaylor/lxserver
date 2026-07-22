@@ -57,6 +57,11 @@ module.exports = {
   // 环境变量: LIST_ADD_MUSIC_LOCATION_TYPE
   "list.addMusicLocationType": "top",
 
+  // 是否禁用数据收集
+  // 环境变量: DISABLE_TELEMETRY (true/false)
+  // 说明：仅收集版本号、运行环境（Docker/Node）、OS类型等非敏感信息用于项目改进。绝对匿名，不收集IP。
+  "disableTelemetry": false,
+
   // 前端管理控制台访问密码
   // 环境变量: FRONTEND_PASSWORD
   "frontend.password": "123456",
@@ -71,6 +76,11 @@ module.exports = {
   ],
 
   // WebDAV 同步配置 (可选，用于数据备份)
+  // 是否启用 WebDAV 同步与备份
+  // 环境变量: WEBDAV_ENABLE (true/false)
+  "webdav.enable": false,
+
+  // WebDAV 服务地址
   // 环境变量: WEBDAV_URL
   "webdav.url": "",
 
@@ -82,9 +92,21 @@ module.exports = {
   // 环境变量: WEBDAV_PASSWORD
   "webdav.password": "",
 
-  // 同步间隔 (分钟)
+  // WebDAV 增量同步远端路径
+  // 环境变量: WEBDAV_SYNC_PATH
+  "webdav.syncPath": "/lx-sync",
+
+  // WebDAV 全量备份远端路径
+  // 环境变量: WEBDAV_BACKUP_PATH
+  "webdav.backupPath": "/lx-sync-backups",
+
+  // 同步检测间隔 (分钟)
   // 环境变量: SYNC_INTERVAL
   "sync.interval": 60,
+
+  // 全量备份间隔 (小时)
+  // 环境变量: BACKUP_INTERVAL
+  "sync.backupInterval": 24,
 
   // 是否启用 Web播放器 访问密码
   // 环境变量: ENABLE_WEBPLAYER_AUTH (true/false)
@@ -93,11 +115,6 @@ module.exports = {
   // Web播放器 访问密码
   // 环境变量: WEBPLAYER_PASSWORD
   "player.password": "123456",
-
-  // 是否禁用数据收集
-  // 环境变量: DISABLE_TELEMETRY (true/false)
-  // 说明：仅收集版本号、运行环境（Docker/Node）、OS类型等非敏感信息用于项目改进。绝对匿名，不收集IP。
-  "disableTelemetry": false,
 
   // 是否启用针对所有外发的请求代理 (目前主要用于离线音源的播放链接获取)
   // 环境变量: PROXY_ALL_ENABLED (true/false)
@@ -124,24 +141,24 @@ module.exports = {
   // 环境变量: SUBSONIC_PATH
   "subsonic.path": "/rest",
 
-  // 是否开启 Subsonic 调试日志模式 (true/false)
-  // 环境变量: SUBSONIC_ENABLE_DEBUG
+  // 是否开启 Subsonic 调试日志模式
+  // 环境变量: 无
   "subsonic.enableDebug": true,
 
-  // 是否开启 Subsonic 在线全网搜索 (true/false)
-  // 环境变量: SUBSONIC_ONLINE_SEARCH
+  // 是否开启 Subsonic 在线全网搜索
+  // 环境变量: 无
   "subsonic.onlineSearch": true,
 
-  // Subsonic 在线搜索模式 (fallback: 自动兜底 | merge: 混合融合 | local_only: 仅本地)
-  // 环境变量: SUBSONIC_ONLINE_SEARCH_MODE
+  // Subsonic 在线搜索模式 (fallback: 回退模式, merge: 合并模式, local_only: 仅本地)
+  // 环境变量: 无
   "subsonic.onlineSearchMode": "fallback",
 
-  // Subsonic 在线搜索默认平台 (多个平台用逗号分隔，如 wy,tx,kw,kg,mg)
-  // 环境变量: SUBSONIC_ONLINE_SEARCH_SOURCES
+  // Subsonic 在线搜索默认平台
+  // 环境变量: 无
   "subsonic.onlineSearchSources": "wy,tx,kw,kg,mg",
 
-  // 是否在 Subsonic 歌词中包含多行翻译 (true/false)
-  // 环境变量: SUBSONIC_LYRIC_TRANSLATION
+  // 是否在 Subsonic 歌词中包含翻译
+  // 环境变量: 无
   "subsonic.lyricTranslation": true,
 
   // 歌手信息源优先级 (多个源用逗号分隔，如 tx,wy)
@@ -151,15 +168,15 @@ module.exports = {
     "wy"
   ],
 
-  // 歌手歌曲最大抓取页数 (用于生成歌手热门歌曲)
-  // 环境变量: ARTIST_MAX_FETCH_PAGES
+  // 歌手歌曲最大抓取页数
+  // 环境变量: 无
   "artist.maxFetchPages": 20,
 
-  // 服务器本地缓存文件命名规则 (standard: 标准规则 | clean: 简洁规则)
-  // 环境变量: CACHE_NAMING_PATTERN
-  "cache.namingPattern": "standard",
+  // 缓存文件命名规则 (simple / custom)
+  // 环境变量: 无
+  "cache.namingPattern": "simple",
 
-  // 是否允许运行原生 VM 模式自定义源脚本 (出于安全考虑，默认关闭)
-  // 环境变量: SYSTEM_ALLOW_UNSAFE_VM
+  // 是否允许运行 VM 模式自定义源脚本 (默认关闭)
+  // 环境变量: 无
   "system.allowUnsafeVM": false
 }

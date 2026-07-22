@@ -522,7 +522,10 @@ const reloadServerData = async () => {
           url: global.lx.config['webdav.url'],
           username: global.lx.config['webdav.username'],
           password: global.lx.config['webdav.password'],
+          syncPath: global.lx.config['webdav.syncPath'],
+          backupPath: global.lx.config['webdav.backupPath'],
           interval: global.lx.config['sync.interval'],
+          backupInterval: global.lx.config['sync.backupInterval'],
         })
       }
       startupLog.info('Config.js re-loaded and merged.')
@@ -1163,7 +1166,7 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
           cpus: os.cpus().length,
           cpuModel: os.cpus()[0]?.model || 'Unknown',
           cpuSpeed: os.cpus()[0]?.speed || 0,
-          isWebDAVConfigured: !!(global.lx.config['webdav.url'] && global.lx.config['webdav.username']),
+          isWebDAVConfigured: !!(global.lx.config['webdav.url'] && global.lx.config['webdav.url'].trim() !== ''),
         }
 
         res.writeHead(200, {
@@ -2049,7 +2052,7 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
             // [核心逻辑] 如果是受限的公开用户，仅允许保存特定的 3 项设置
             if (resolvedUsername === '_open' && global.lx.config['user.enablePublicRestriction']) {
               const restrictedSettings: any = {}
-              const allowedKeys = ['enableServerCache', 'enableServerLyricCache', 'serverCacheLocation', 'serverCacheNamingPattern', 'downloadConcurrency', 'enableRemaster']
+              const allowedKeys = ['enableServerCache', 'enableServerLyricCache', 'serverCacheLocation', 'serverCacheNamingPattern', 'downloadConcurrency', 'enableRemaster', 'preferredQuality']
               allowedKeys.forEach(key => {
                 if (settings[key] !== undefined) restrictedSettings[key] = settings[key]
               })
@@ -4999,10 +5002,14 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
             'frontend.password': global.lx.config['frontend.password'],
             'player.enableAuth': global.lx.config['player.enableAuth'] || false,
             'player.password': global.lx.config['player.password'] || '',
+            'webdav.enable': global.lx.config['webdav.enable'] ?? false,
             'webdav.url': global.lx.config['webdav.url'] || '',
             'webdav.username': global.lx.config['webdav.username'] || '',
             'webdav.password': global.lx.config['webdav.password'] || '',
+            'webdav.syncPath': global.lx.config['webdav.syncPath'] || '/lx-sync',
+            'webdav.backupPath': global.lx.config['webdav.backupPath'] || '/lx-sync-backups',
             'sync.interval': global.lx.config['sync.interval'] || 60,
+            'sync.backupInterval': global.lx.config['sync.backupInterval'] || 24,
             'proxy.all.enabled': global.lx.config['proxy.all.enabled'] || false,
             'proxy.all.address': global.lx.config['proxy.all.address'] || '',
             'admin.path': global.lx.config['admin.path'] ?? '',
@@ -5068,10 +5075,14 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
               if (newConfig['player.password'] !== undefined) global.lx.config['player.password'] = newConfig['player.password']
 
               // WebDAV 配置
+              if (newConfig['webdav.enable'] !== undefined) global.lx.config['webdav.enable'] = newConfig['webdav.enable']
               if (newConfig['webdav.url'] !== undefined) global.lx.config['webdav.url'] = newConfig['webdav.url']
               if (newConfig['webdav.username'] !== undefined) global.lx.config['webdav.username'] = newConfig['webdav.username']
               if (newConfig['webdav.password'] !== undefined) global.lx.config['webdav.password'] = newConfig['webdav.password']
+              if (newConfig['webdav.syncPath'] !== undefined) global.lx.config['webdav.syncPath'] = newConfig['webdav.syncPath']
+              if (newConfig['webdav.backupPath'] !== undefined) global.lx.config['webdav.backupPath'] = newConfig['webdav.backupPath']
               if (newConfig['sync.interval'] !== undefined) global.lx.config['sync.interval'] = parseInt(newConfig['sync.interval'])
+              if (newConfig['sync.backupInterval'] !== undefined) global.lx.config['sync.backupInterval'] = parseInt(newConfig['sync.backupInterval']) || 24
               if (newConfig['proxy.all.enabled'] !== undefined) global.lx.config['proxy.all.enabled'] = newConfig['proxy.all.enabled']
               if (newConfig['proxy.all.address'] !== undefined) global.lx.config['proxy.all.address'] = newConfig['proxy.all.address']
 
@@ -5127,12 +5138,16 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
               }
 
               // 更新 WebDAVSync 配置
-              if (global.lx.webdavSync && (newConfig['webdav.url'] || newConfig['webdav.username'] || newConfig['webdav.password'] || newConfig['sync.interval'])) {
+              if (global.lx.webdavSync && (newConfig['webdav.enable'] !== undefined || newConfig['webdav.url'] || newConfig['webdav.username'] || newConfig['webdav.password'] || newConfig['webdav.syncPath'] || newConfig['webdav.backupPath'] || newConfig['sync.interval'] || newConfig['sync.backupInterval'])) {
                 global.lx.webdavSync.updateConfig({
+                  enable: global.lx.config['webdav.enable'],
                   url: global.lx.config['webdav.url'],
                   username: global.lx.config['webdav.username'],
                   password: global.lx.config['webdav.password'],
+                  syncPath: global.lx.config['webdav.syncPath'],
+                  backupPath: global.lx.config['webdav.backupPath'],
                   interval: global.lx.config['sync.interval'],
+                  backupInterval: global.lx.config['sync.backupInterval'],
                 })
               }
 
@@ -5144,15 +5159,22 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                 'user.enablePath': global.lx.config['user.enablePath'],
                 'user.enableRoot': global.lx.config['user.enableRoot'],
                 'user.enablePublicRestriction': global.lx.config['user.enablePublicRestriction'],
+                'user.enableLoginCacheRestriction': global.lx.config['user.enableLoginCacheRestriction'],
+                'user.enableCacheSizeLimit': global.lx.config['user.enableCacheSizeLimit'],
+                'user.cacheSizeLimit': global.lx.config['user.cacheSizeLimit'],
                 maxSnapshotNum: global.lx.config.maxSnapshotNum,
                 'list.addMusicLocationType': global.lx.config['list.addMusicLocationType'],
                 'frontend.password': global.lx.config['frontend.password'],
                 'player.enableAuth': global.lx.config['player.enableAuth'],
                 'player.password': global.lx.config['player.password'],
+                'webdav.enable': global.lx.config['webdav.enable'],
                 'webdav.url': global.lx.config['webdav.url'],
                 'webdav.username': global.lx.config['webdav.username'],
                 'webdav.password': global.lx.config['webdav.password'],
+                'webdav.syncPath': global.lx.config['webdav.syncPath'],
+                'webdav.backupPath': global.lx.config['webdav.backupPath'],
                 'sync.interval': global.lx.config['sync.interval'],
+                'sync.backupInterval': global.lx.config['sync.backupInterval'],
                 'proxy.all.enabled': global.lx.config['proxy.all.enabled'],
                 'proxy.all.address': global.lx.config['proxy.all.address'],
                 'admin.path': global.lx.config['admin.path'] ?? '',
@@ -5164,6 +5186,7 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                 'subsonic.onlineSearchMode': global.lx.config['subsonic.onlineSearchMode'],
                 'subsonic.onlineSearchSources': global.lx.config['subsonic.onlineSearchSources'],
                 'subsonic.lyricTranslation': global.lx.config['subsonic.lyricTranslation'],
+                'singer.sourcePriority': global.lx.config['singer.sourcePriority'],
                 'artist.maxFetchPages': global.lx.config['artist.maxFetchPages'],
                 'system.allowUnsafeVM': global.lx.config['system.allowUnsafeVM'],
                 users: global.lx.config.users.map(u => ({
