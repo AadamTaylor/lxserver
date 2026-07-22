@@ -3051,20 +3051,52 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
         }
         void readBody(req).then(body => {
           try {
-            const { filenames } = JSON.parse(body)
-            if (!filenames) throw new Error('Missing filenames')
+            const payload = JSON.parse(body)
+            const legacyFilenames = payload.filenames
+            const rawItems = Array.isArray(payload.items)
+              ? payload.items
+              : (legacyFilenames ? (Array.isArray(legacyFilenames) ? legacyFilenames : [legacyFilenames]) : [])
+            if (rawItems.length === 0) throw new Error('Missing items')
 
-            const fileList = Array.isArray(filenames) ? filenames : [filenames]
+            const deleteItems: Array<{ filename: string; folder?: fileCache.CacheFolder }> = rawItems.map((item: any) => {
+              if (typeof item === 'string') return { filename: item }
+              if (!item || typeof item.filename !== 'string') throw new Error('Invalid delete item')
+              if (item.folder !== undefined && item.folder !== 'cache' && item.folder !== 'music') {
+                throw new Error('Invalid folder')
+              }
+              return { filename: item.filename, folder: item.folder }
+            })
+
             let deletedCount = 0
-            for (const f of fileList) {
-              if (fileCache.removeCacheFile(f, username)) deletedCount++
+            const failures: Array<{ filename: string; folder?: fileCache.CacheFolder; message: string }> = []
+            for (const item of deleteItems) {
+              try {
+                const result = fileCache.removeCacheFile(item.filename, username, item.folder)
+                if (result.deleted) {
+                  deletedCount++
+                  accessLog.info(`music file deleted user=${username} folder=${result.folder} filename=${JSON.stringify(item.filename)}`)
+                } else {
+                  failures.push({ ...item, message: 'File not found' })
+                }
+              } catch (error: any) {
+                failures.push({ ...item, message: error?.message || 'Delete failed' })
+                accessLog.warn(`music file delete rejected user=${username} folder=${item.folder || 'unspecified'} filename=${JSON.stringify(item.filename)} reason=${JSON.stringify(error?.message || 'Delete failed')}`)
+              }
             }
 
-            res.writeHead(200, { 'Content-Type': 'application/json' })
-            res.end(JSON.stringify({ success: true, deletedCount }))
+            const success = failures.length === 0
+            const statusCode = success ? 200 : (deletedCount > 0 ? 207 : 409)
+            res.writeHead(statusCode, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({
+              success,
+              deletedCount,
+              failedCount: failures.length,
+              failures,
+              message: success ? undefined : failures[0]?.message,
+            }))
           } catch (e: any) {
-            res.writeHead(400)
-            res.end(e.message)
+            res.writeHead(400, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: false, message: e.message }))
           }
         })
         return

@@ -61,6 +61,18 @@ window.LocalMusicManager = {
         return this.escapeHtml(value);
     },
 
+    getItemKey(item) {
+        return `${item.folder}\u0000${item.filename}`;
+    },
+
+    getSelectedEntries() {
+        return this.originalData.filter(item => this.selectedItems.has(this.getItemKey(item)));
+    },
+
+    getSelectedFilenames() {
+        return this.getSelectedEntries().map(item => item.filename);
+    },
+
     bindListEvents() {
         if (this.listEventsBound) return;
         const container = document.getElementById('lm-list-container');
@@ -78,7 +90,7 @@ window.LocalMusicManager = {
                     this.downloadSingle(index);
                     break;
                 case 'delete':
-                    this.deleteSingle(target.dataset.lmFilename || '');
+                    this.deleteSingle(index);
                     break;
                 case 'manual':
                     this.openManualIndexModal(index);
@@ -91,7 +103,7 @@ window.LocalMusicManager = {
         container.addEventListener('change', (event) => {
             const target = event.target;
             if (!target.matches('[data-lm-action="select"]')) return;
-            this.toggleSelect(target.dataset.lmFilename || '', target.checked);
+            this.toggleSelect(parseInt(target.dataset.lmIndex || '', 10), target.checked);
         });
     },
 
@@ -586,7 +598,7 @@ window.LocalMusicManager = {
         this.displayData = current;
 
         // Clean up selected items that are no longer in display
-        const displayIdentifiers = new Set(this.displayData.map(i => i.filename));
+        const displayIdentifiers = new Set(this.displayData.map(item => this.getItemKey(item)));
         for (const sel of this.selectedItems) {
             if (!displayIdentifiers.has(sel)) {
                 this.selectedItems.delete(sel);
@@ -689,7 +701,6 @@ window.LocalMusicManager = {
         let html = '';
         page.list.forEach((item, pageIndex) => {
             const index = page.start + pageIndex;
-            const safeFilename = this.escapeAttr(item.filename || '');
             const safeName = this.escapeHtml(item.name || '未知歌曲');
             const safeSinger = this.escapeHtml(item.singer || '未知歌手');
             const safeAlbum = this.escapeHtml(item.album || '--');
@@ -719,7 +730,7 @@ window.LocalMusicManager = {
                     ? `<span class="text-[10px] text-amber-500 border border-amber-400/40 rounded px-1 scale-90 hidden sm:inline-block" title="${this.escapeAttr(item.embedLyricError || item.metadataError || '音频容器不支持嵌入歌词，已保留外置歌词')}">外置词</span>`
                     : '';
 
-            const isSelected = this.selectedItems.has(item.filename);
+            const isSelected = this.selectedItems.has(this.getItemKey(item));
             const qualityClass = window.QualityManager && window.QualityManager.getQualityColor ? window.QualityManager.getQualityColor(item.quality) : 'bg-gray-100 text-gray-600';
             const qualityName = window.QualityManager ? window.QualityManager.getQualityDisplayName(item.quality) : item.quality;
 
@@ -752,13 +763,13 @@ window.LocalMusicManager = {
             const folderIcon = item.folder === 'music' ? '<i class="fas fa-download text-blue-500 mr-1" title="下载目录"></i>' : '<i class="fas fa-hdd text-emerald-500 mr-1" title="缓存目录"></i>';
 
             html += `
-            <div class="grid grid-cols-12 gap-2 md:gap-4 p-3 md:p-2 items-center rounded-xl hover:t-bg-item-hover transition-all t-border-main border-b last:border-b-0 group relative ${isSelected ? 't-bg-item-hover ring-1 ring-emerald-500/30' : ''}" data-lm-filename="${safeFilename}">
+            <div class="grid grid-cols-12 gap-2 md:gap-4 p-3 md:p-2 items-center rounded-xl hover:t-bg-item-hover transition-all t-border-main border-b last:border-b-0 group relative ${isSelected ? 't-bg-item-hover ring-1 ring-emerald-500/30' : ''}" data-lm-row-index="${index}">
                 <!-- # / Batch -->
                 <div class="col-span-1 text-center text-xs font-mono t-text-muted flex-shrink-0 flex items-center justify-center">
                     <div class="${this.batchMode ? 'hidden' : 'block'}">${index + 1}</div>
                     <div class="${this.batchMode ? 'block' : 'hidden'}">
                         <label class="flex items-center justify-center w-full h-full cursor-pointer">
-                            <input type="checkbox" data-lm-action="select" data-lm-filename="${safeFilename}" ${isSelected ? 'checked' : ''}
+                            <input type="checkbox" data-lm-action="select" data-lm-index="${index}" ${isSelected ? 'checked' : ''}
                                 class="w-4 h-4 rounded border-gray-300 text-emerald-500 focus:ring-emerald-500 mx-auto cursor-pointer transition-all">
                         </label>
                     </div>
@@ -859,7 +870,7 @@ window.LocalMusicManager = {
                         <i class="fas fa-download text-[10px]"></i>
                     </button>
                     <!-- Deletion from single operations -->
-                    <button data-lm-action="delete" data-lm-filename="${safeFilename}"
+                    <button data-lm-action="delete" data-lm-index="${index}"
                             class="w-8 h-8 md:w-7 md:h-7 flex items-center justify-center rounded-full t-bg-main border t-border-main t-text-muted hover:text-red-500 hover:border-red-300 transition-all shadow-sm shrink-0" title="删除">
                         <i class="far fa-trash-alt text-[10px]"></i>
                     </button>
@@ -901,15 +912,18 @@ window.LocalMusicManager = {
         }, 80);
     },
 
-    toggleSelect(filename, checked) {
+    toggleSelect(index, checked) {
+        const item = this.displayData[index];
+        if (!item) return;
+        const key = this.getItemKey(item);
         if (checked) {
-            this.selectedItems.add(filename);
+            this.selectedItems.add(key);
         } else {
-            this.selectedItems.delete(filename);
+            this.selectedItems.delete(key);
         }
 
         // Update DOM visually immediately if possible
-        const row = Array.from(document.querySelectorAll('[data-lm-filename]')).find(el => el.dataset.lmFilename === filename);
+        const row = document.querySelector(`[data-lm-row-index="${index}"]`);
         if (row) {
             if (checked) {
                 row.classList.add('t-bg-item-hover', 'ring-1', 'ring-emerald-500/30');
@@ -974,7 +988,7 @@ window.LocalMusicManager = {
     },
 
     selectAll() {
-        this.displayData.forEach(item => this.selectedItems.add(item.filename));
+        this.displayData.forEach(item => this.selectedItems.add(this.getItemKey(item)));
         this.updateBatchUI();
         this.render();
     },
@@ -1028,13 +1042,18 @@ window.LocalMusicManager = {
         }
     },
 
-    async deleteSingle(filename) {
+    async deleteSingle(index) {
+        const item = this.displayData[index];
+        if (!item) {
+            if (typeof showError === 'function') showError('文件信息已失效，请刷新后重试');
+            return;
+        }
         if (typeof showSelect === 'function') {
             if (!(await showSelect('删除本地文件', '确定要删除此文件吗?', { danger: true }))) return;
         } else {
             if (!confirm('确定要删除此文件吗?')) return;
         }
-        this._executeDelete([filename]);
+        this._executeDelete([item]);
     },
 
     async batchDelete() {
@@ -1047,10 +1066,10 @@ window.LocalMusicManager = {
         } else {
             if (!confirm(`确定要删除 ${this.selectedItems.size} 个文件吗?`)) return;
         }
-        this._executeDelete(Array.from(this.selectedItems));
+        this._executeDelete(this.getSelectedEntries());
     },
 
-    async _executeDelete(filenames) {
+    async _executeDelete(items) {
         try {
             const res = await fetch('/api/music/cache/remove', {
                 method: 'POST',
@@ -1058,18 +1077,19 @@ window.LocalMusicManager = {
                     'Content-Type': 'application/json',
                     ...(window.getUserAuthHeaders ? window.getUserAuthHeaders() : {})
                 },
-                body: JSON.stringify({ filenames })
+                body: JSON.stringify({
+                    items: items.map(item => ({ filename: item.filename, folder: item.folder }))
+                })
             });
             const result = await res.json();
-            if (result.success) {
-                if (typeof showInfo === 'function') showInfo(`成功删除了 ${result.deletedCount || filenames.length} 个文件`);
+            if (result.deletedCount > 0) {
                 // Clear selection
-                for (const f of filenames) this.selectedItems.delete(f);
+                for (const item of items) this.selectedItems.delete(this.getItemKey(item));
                 this.updateBatchUI();
                 await this.refresh();
-            } else {
-                throw new Error(result.message || 'Server returned error');
             }
+            if (!res.ok || !result.success) throw new Error(result.message || 'Server returned error');
+            if (typeof showInfo === 'function') showInfo(`成功删除了 ${result.deletedCount} 个文件`);
         } catch (e) {
             if (typeof showError === 'function') showError('删除失败: ' + e.message);
             console.error('Delete error:', e);
@@ -1078,8 +1098,7 @@ window.LocalMusicManager = {
 
     async batchFetchLyrics() {
         // Find items that don't have lyrics
-        const targetFilenames = Array.from(this.selectedItems);
-        const targets = this.displayData.filter(i => targetFilenames.includes(i.filename) && !i.hasLyric);
+        const targets = this.getSelectedEntries().filter(item => !item.hasLyric);
 
         if (targets.length === 0) {
             if (typeof showInfo === 'function') showInfo('选中的歌曲中没有需要补充歌词的项');
@@ -1123,7 +1142,7 @@ window.LocalMusicManager = {
     },
 
     async batchEmbedLyric() {
-        const targetFilenames = Array.from(this.selectedItems);
+        const targetFilenames = this.getSelectedFilenames();
         if (targetFilenames.length === 0) {
             if (typeof showError === 'function') showError('请先选择要嵌入歌词的文件');
             return;
@@ -1177,8 +1196,8 @@ window.LocalMusicManager = {
     },
 
     async batchUpdateMetadata() {
-        const targetFilenames = Array.from(this.selectedItems);
-        const targets = this.displayData.filter(i => targetFilenames.includes(i.filename));
+        const targets = this.getSelectedEntries();
+        const targetFilenames = targets.map(item => item.filename);
 
         if (targets.length === 0) {
             if (typeof showInfo === 'function') showInfo('请先选择需要补全元信息的文件');
@@ -1215,25 +1234,26 @@ window.LocalMusicManager = {
     },
 
     async batchSwitchFolder() {
-        const originalFilenames = Array.from(this.selectedItems);
-        if (originalFilenames.length === 0) {
+        const selectedEntries = this.getSelectedEntries();
+        if (selectedEntries.length === 0) {
             if (typeof showError === 'function') showError('请先选择要移动的文件');
             return;
         }
 
-        let targetFilenames = [...originalFilenames];
+        let targetEntries = [...selectedEntries];
         let skipCount = 0;
 
         // [Constraint Check] 识别在 'music' 目录下的子目录歌曲
         // 移动（下载 -> 缓存）时，缓存目录不支持子目录结构
         if (this.filterFolder === 'music') {
-            targetFilenames = originalFilenames.filter(fname => {
-                const item = this.originalData.find(i => i.filename === fname);
+            targetEntries = selectedEntries.filter(item => {
                 const hasSub = item && item.subPath && item.subPath !== '';
                 if (hasSub) skipCount++;
                 return !hasSub;
             });
         }
+
+        const targetFilenames = targetEntries.map(item => item.filename);
 
         if (targetFilenames.length === 0) {
             if (skipCount > 0) {
@@ -1276,7 +1296,7 @@ window.LocalMusicManager = {
     },
 
     async batchSwitchBaseLocation() {
-        const targetFilenames = Array.from(this.selectedItems);
+        const targetFilenames = this.getSelectedFilenames();
         if (targetFilenames.length === 0) {
             if (typeof showError === 'function') showError('请先选择要转移的文件');
             return;
@@ -1332,8 +1352,7 @@ window.LocalMusicManager = {
     },
 
     batchDownloadToDevice() {
-        const targetFilenames = Array.from(this.selectedItems);
-        const targets = this.displayData.filter(i => targetFilenames.includes(i.filename));
+        const targets = this.getSelectedEntries();
 
         if (targets.length === 0) {
             if (typeof showError === 'function') showError('请先选择要保存的文件');
@@ -1965,7 +1984,7 @@ window.LocalMusicManager = {
     },
 
     async batchCategorize(targetSubPath) {
-        const filenames = Array.from(this.selectedItems);
+        const filenames = this.getSelectedFilenames();
         if (filenames.length === 0) return;
 
         if (typeof showMsg === 'function') showMsg(`正在移动 ${filenames.length} 首歌曲到 ${targetSubPath || '根目录'}...`, 'info');

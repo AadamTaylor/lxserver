@@ -6155,6 +6155,14 @@ let currentCacheList = [];
 let selectedCacheFiles = new Set();
 let cacheBatchMode = false;
 
+function getCacheItemKey(item) {
+    return `${item.folder}\u0000${item.filename}`;
+}
+
+function getSelectedCacheItems() {
+    return currentCacheList.filter(item => selectedCacheFiles.has(getCacheItemKey(item)));
+}
+
 function toggleCacheDrawer() {
     const drawer = document.getElementById('cache-drawer');
     if (drawer) {
@@ -6217,7 +6225,7 @@ function renderCacheList() {
     }
 
     container.innerHTML = currentCacheList.map((item, idx) => {
-        const isSelected = selectedCacheFiles.has(item.filename);
+        const isSelected = selectedCacheFiles.has(getCacheItemKey(item));
 
         // 样式同步：使用主列表的来源标签生成函数
         const sourceTagHtml = window.getSourceTag ? window.getSourceTag(item.source) : `<span class="px-1 py-0 rounded text-[10px] font-bold border t-badge-red mr-1">${item.source.toUpperCase()}</span>`;
@@ -6254,7 +6262,7 @@ function renderCacheList() {
         return `
             <div class="group flex items-center p-2.5 rounded-2xl hover:t-bg-panel-light transition-all duration-300 gap-3 border border-transparent 
                 ${isSelected ? 't-bg-panel-light border-blue-500/30 ring-1 ring-blue-500/10' : ''}" 
-                onclick="${cacheBatchMode ? `toggleCacheSelection('${item.filename.replace(/'/g, "\\'")}')` : ''}">
+                onclick="${cacheBatchMode ? `toggleCacheSelection(${idx})` : ''}">
                 
                 ${cacheBatchMode ? `
                 <div class="flex-shrink-0 w-5 flex items-center justify-center">
@@ -6299,7 +6307,7 @@ function renderCacheList() {
 
                 <div class="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                     ${!cacheBatchMode ? `
-                        <button onclick="event.stopPropagation(); removeCacheItem('${item.filename.replace(/'/g, "\\'")}')" 
+                        <button onclick="event.stopPropagation(); removeCacheItem(${idx})"
                                 class="p-2 t-text-muted hover:text-red-500 transition-colors" title="删除">
                             <i class="fas fa-trash-alt text-xs"></i>
                         </button>
@@ -6408,18 +6416,21 @@ function exitCacheBatchMode() {
     renderCacheList();
 }
 
-function toggleCacheSelection(filename) {
-    if (selectedCacheFiles.has(filename)) {
-        selectedCacheFiles.delete(filename);
+function toggleCacheSelection(index) {
+    const item = currentCacheList[index];
+    if (!item) return;
+    const key = getCacheItemKey(item);
+    if (selectedCacheFiles.has(key)) {
+        selectedCacheFiles.delete(key);
     } else {
-        selectedCacheFiles.add(filename);
+        selectedCacheFiles.add(key);
     }
     renderCacheList();
     updateCacheBatchCount();
 }
 
 function selectAllCache() {
-    currentCacheList.forEach(item => selectedCacheFiles.add(item.filename));
+    currentCacheList.forEach(item => selectedCacheFiles.add(getCacheItemKey(item)));
     renderCacheList();
     updateCacheBatchCount();
 }
@@ -6435,7 +6446,12 @@ function updateCacheBatchCount() {
     if (el) el.textContent = selectedCacheFiles.size;
 }
 
-async function removeCacheItem(filename) {
+async function removeCacheItem(index) {
+    const item = currentCacheList[index];
+    if (!item) {
+        showError('文件信息已失效，请刷新后重试');
+        return;
+    }
     const isLogined = !!localStorage.getItem('lx_user_token');
     const isPublicUser = !window.currentListData || !window.currentListData.username || window.currentListData.username === 'default';
     if (isPublicUser && window.lx_config && window.lx_config['user.enablePublicRestriction'] && !isLogined) {
@@ -6462,14 +6478,15 @@ async function removeCacheItem(filename) {
         const res = await fetch('/api/music/cache/remove', {
             method: 'POST',
             headers: headers,
-            body: JSON.stringify({ filenames: [filename] })
+            body: JSON.stringify({ items: [{ filename: item.filename, folder: item.folder }] })
         });
 
-        if (res.ok) {
+        const result = await res.json();
+        if (res.ok && result.success) {
             showSuccess('已删除');
             refreshCacheList();
         } else {
-            throw new Error('删除失败');
+            throw new Error(result.message || '删除失败');
         }
     } catch (e) {
         showError(e.message);
@@ -6477,7 +6494,8 @@ async function removeCacheItem(filename) {
 }
 
 async function batchDeleteCache() {
-    if (selectedCacheFiles.size === 0) {
+    const deleteItems = getSelectedCacheItems();
+    if (deleteItems.length === 0) {
         showError('请先选择文件');
         return;
     }
@@ -6496,7 +6514,7 @@ async function batchDeleteCache() {
         }
     }
 
-    if (!(await showSelect('批量删除', `确定要删除这 ${selectedCacheFiles.size} 个缓存文件吗？`, { danger: true }))) return;
+    if (!(await showSelect('批量删除', `确定要删除这 ${deleteItems.length} 个缓存文件吗？`, { danger: true }))) return;
 
     try {
         const username = (window.currentListData && window.currentListData.username) || localStorage.getItem('lx_sync_user') || '';
@@ -6506,16 +6524,18 @@ async function batchDeleteCache() {
         const res = await fetch('/api/music/cache/remove', {
             method: 'POST',
             headers: headers,
-            body: JSON.stringify({ filenames: Array.from(selectedCacheFiles) })
+            body: JSON.stringify({
+                items: deleteItems.map(item => ({ filename: item.filename, folder: item.folder }))
+            })
         });
 
-        if (res.ok) {
-            showSuccess(`成功删除 ${selectedCacheFiles.size} 个文件`);
+        const result = await res.json();
+        if (result.deletedCount > 0) {
             exitCacheBatchMode();
-            refreshCacheList();
-        } else {
-            throw new Error('删除失败');
+            await refreshCacheList();
         }
+        if (!res.ok || !result.success) throw new Error(result.message || '删除失败');
+        showSuccess(`成功删除 ${result.deletedCount} 个文件`);
     } catch (e) {
         showError(e.message);
     }
