@@ -41,6 +41,14 @@ module.exports = {
   // 环境变量: ENABLE_PUBLIC_FAVORITES (true/false)
   "user.enablePublicFavorites": false,
 
+  // 是否开启非管理员访问本地音乐 (开启后允许未登录管理员的公开账号访问本地音乐)
+  // 环境变量: ENABLE_PUBLIC_NON_ADMIN_LOCAL_MUSIC (true/false)
+  "user.enablePublicNonAdminLocalMusic": false,
+
+  // 是否开启非管理员访问公开收藏和歌曲 (开启后允许未登录管理员的公开账号查看公开收藏和歌曲)
+  // 环境变量: ENABLE_PUBLIC_NON_ADMIN_ACCESS (true/false)
+  "user.enablePublicNonAdminAccess": false,
+
   // 是否启用登录用户缓存限制 (开启后将限制非管理员登录用户的核心缓存设置)
   // 环境变量: ENABLE_LOGIN_USER_CACHE_RESTRICTION (true/false)
   "user.enableLoginCacheRestriction": false,

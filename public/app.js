@@ -127,6 +127,12 @@ class App {
             await this.saveConfig(true);
             this.loadConfig();
         });
+        document.querySelector('input[name="user.enablePublicFavorites"]')?.addEventListener('change', () => {
+            this.togglePublicNonAdminAccessVisibility();
+        });
+        document.querySelector('input[name="user.enablePublicRestriction"]')?.addEventListener('change', () => {
+            this.togglePublicNonAdminLocalMusicVisibility();
+        });
 
         // 日志查看
         document.getElementById('refresh-logs-btn')?.addEventListener('click', () => this.loadLogs());
@@ -1706,9 +1712,17 @@ class App {
             if (form.elements['user.enablePublicRestriction']) {
                 form.elements['user.enablePublicRestriction'].checked = config['user.enablePublicRestriction'] === true;
             }
+            if (form.elements['user.enablePublicNonAdminLocalMusic']) {
+                form.elements['user.enablePublicNonAdminLocalMusic'].checked = config['user.enablePublicNonAdminLocalMusic'] === true;
+            }
+            this.togglePublicNonAdminLocalMusicVisibility();
             if (form.elements['user.enablePublicFavorites']) {
                 form.elements['user.enablePublicFavorites'].checked = config['user.enablePublicFavorites'] === true;
             }
+            if (form.elements['user.enablePublicNonAdminAccess']) {
+                form.elements['user.enablePublicNonAdminAccess'].checked = config['user.enablePublicNonAdminAccess'] === true;
+            }
+            this.togglePublicNonAdminAccessVisibility();
             if (form.elements['user.enableLoginCacheRestriction']) {
                 form.elements['user.enableLoginCacheRestriction'].checked = config['user.enableLoginCacheRestriction'] === true;
             }
@@ -1800,6 +1814,22 @@ class App {
         }
     }
 
+    togglePublicNonAdminAccessVisibility() {
+        const favCb = document.querySelector('input[name="user.enablePublicFavorites"]');
+        const childWrapper = document.getElementById('public-non-admin-access-wrapper');
+        if (favCb && childWrapper) {
+            childWrapper.style.display = favCb.checked ? 'block' : 'none';
+        }
+    }
+
+    togglePublicNonAdminLocalMusicVisibility() {
+        const resCb = document.querySelector('input[name="user.enablePublicRestriction"]');
+        const childWrapper = document.getElementById('public-non-admin-local-music-wrapper');
+        if (resCb && childWrapper) {
+            childWrapper.style.display = resCb.checked ? 'block' : 'none';
+        }
+    }
+
     async saveConfig(silent = false) {
         if (!this.configLoaded) return;
         const form = document.getElementById('config-form');
@@ -1840,7 +1870,9 @@ class App {
             'user.enablePath': formData.get('user.enablePath') === 'on',
             'user.enableRoot': formData.get('user.enableRoot') === 'on',
             'user.enablePublicRestriction': formData.get('user.enablePublicRestriction') === 'on',
+            'user.enablePublicNonAdminLocalMusic': formData.get('user.enablePublicNonAdminLocalMusic') === 'on',
             'user.enablePublicFavorites': formData.get('user.enablePublicFavorites') === 'on',
+            'user.enablePublicNonAdminAccess': formData.get('user.enablePublicNonAdminAccess') === 'on',
             'user.enableLoginCacheRestriction': formData.get('user.enableLoginCacheRestriction') === 'on',
             'user.enableCacheSizeLimit': formData.get('user.enableCacheSizeLimit') === 'on',
             'user.cacheSizeLimit': parseInt(formData.get('user.cacheSizeLimit')) || 2000,

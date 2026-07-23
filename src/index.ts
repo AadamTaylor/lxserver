@@ -225,8 +225,14 @@ if (envParams.DISABLE_TELEMETRY) {
 if (envParams.ENABLE_PUBLIC_USER_RESTRICTION) {
   global.lx.config['user.enablePublicRestriction'] = envParams.ENABLE_PUBLIC_USER_RESTRICTION === 'true'
 }
+if (envParams.ENABLE_PUBLIC_NON_ADMIN_LOCAL_MUSIC) {
+  global.lx.config['user.enablePublicNonAdminLocalMusic'] = envParams.ENABLE_PUBLIC_NON_ADMIN_LOCAL_MUSIC === 'true'
+}
 if (envParams.ENABLE_PUBLIC_FAVORITES) {
   global.lx.config['user.enablePublicFavorites'] = envParams.ENABLE_PUBLIC_FAVORITES === 'true'
+}
+if (envParams.ENABLE_PUBLIC_NON_ADMIN_ACCESS) {
+  global.lx.config['user.enablePublicNonAdminAccess'] = envParams.ENABLE_PUBLIC_NON_ADMIN_ACCESS === 'true'
 }
 if (envParams.ENABLE_LOGIN_USER_CACHE_RESTRICTION) {
   global.lx.config['user.enableLoginCacheRestriction'] = envParams.ENABLE_LOGIN_USER_CACHE_RESTRICTION === 'true'

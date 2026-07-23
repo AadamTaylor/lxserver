@@ -79,7 +79,11 @@ window.LocalMusicManager = {
             buffer = '';
         };
 
-        for (const char of String(expression || '')) {
+        const str = String(expression || '');
+        let i = 0;
+        while (i < str.length) {
+            const char = str[i];
+
             if (quote) {
                 if (escaped) {
                     buffer += char;
@@ -91,27 +95,348 @@ window.LocalMusicManager = {
                 } else {
                     buffer += char;
                 }
+                i++;
                 continue;
             }
 
             if (char === '"' || char === "'") {
                 quote = char;
+                i++;
                 continue;
             }
 
+            // 1. 优先检测由 lm-op-tag 转换生成的 \u0001[op]\u0001 显式运算符标签
+            if (char === '\u0001') {
+                const nextMarker = str.indexOf('\u0001', i + 1);
+                if (nextMarker !== -1) {
+                    const op = str.substring(i + 1, nextMarker).trim();
+                    const opType = operatorTypes[op];
+                    if (opType) {
+                        flushTerm();
+                        tokens.push({ type: opType });
+                        i = nextMarker + 1;
+                        continue;
+                    }
+                }
+            }
+
+            // 2. 兜底检测：符号后紧跟空格或处于串尾的运算符
             const operatorType = operatorTypes[char];
             if (operatorType) {
-                flushTerm();
-                tokens.push({ type: operatorType });
-            } else {
-                buffer += char;
+                const nextChar = str[i + 1];
+                const isFollowedBySpaceOrEnd = !nextChar || /\s/.test(nextChar);
+                if (isFollowedBySpaceOrEnd) {
+                    flushTerm();
+                    tokens.push({ type: operatorType });
+                    i++;
+                    continue;
+                }
             }
+
+            // 普通字符（例如 R&B 中的 &）
+            buffer += char;
+            i++;
         }
 
         if (quote) return null;
         if (escaped) buffer += '\\';
         flushTerm();
         return tokens;
+    },
+
+    getRichInputValue(el) {
+        if (!el) return '';
+        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+            return el.value || '';
+        }
+        let result = '';
+        const walk = (node) => {
+            if (node.nodeType === 3) {
+                result += node.nodeValue;
+            } else if (node.nodeType === 1) {
+                if (node.classList.contains('lm-op-tag')) {
+                    const op = node.getAttribute('data-op') || node.textContent.trim();
+                    result += `\u0001${op}\u0001 `;
+                } else if (node.tagName === 'BR') {
+                    result += ' ';
+                } else {
+                    for (let child of node.childNodes) walk(child);
+                }
+            }
+        };
+        walk(el);
+        return result.replace(/[\u200B\u00A0]/g, ' ');
+    },
+
+    setRichInputValue(el, value) {
+        if (!el) return;
+        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+            el.value = value || '';
+            return;
+        }
+        const str = String(value || '');
+        if (!str.trim()) {
+            el.innerHTML = '';
+            return;
+        }
+
+        let html = '\u200B';
+        let i = 0;
+        const operatorSymbols = ['&', '|', '!', '(', ')'];
+
+        while (i < str.length) {
+            if (str[i] === '\u0001') {
+                const nextMarker = str.indexOf('\u0001', i + 1);
+                if (nextMarker !== -1) {
+                    const op = str.substring(i + 1, nextMarker).trim();
+                    if (operatorSymbols.includes(op)) {
+                        html += `<span class="lm-op-tag" data-op="${this.escapeAttr(op)}" contenteditable="false">${this.escapeHtml(op)}</span>&nbsp;`;
+                        i = nextMarker + 1;
+                        if (i < str.length && str[i] === ' ') i++;
+                        continue;
+                    }
+                }
+            }
+            const char = str[i];
+            if (operatorSymbols.includes(char) && (i + 1 >= str.length || /\s/.test(str[i + 1]))) {
+                html += `<span class="lm-op-tag" data-op="${this.escapeAttr(char)}" contenteditable="false">${this.escapeHtml(char)}</span>&nbsp;`;
+                i += (str[i + 1] === ' ' ? 2 : 1);
+                continue;
+            }
+            html += this.escapeHtml(char);
+            i++;
+        }
+        el.innerHTML = html;
+    },
+
+    formatRichInput(el, force = false) {
+        if (!el || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') return false;
+
+        const rawVal = this.getRichInputValue(el).replace(/[\u200B\u00A0]/g, '').trim();
+        if (!rawVal) {
+            el.innerHTML = '';
+            this.updateSearchInputErrorState(el, '');
+            return false;
+        }
+
+        let needsFormat = force;
+        if (!needsFormat) {
+            const walkCheck = (node) => {
+                if (node.nodeType === 3) {
+                    const text = node.nodeValue || '';
+                    if (/([&|!()])(\s|\u00A0)/.test(text)) {
+                        needsFormat = true;
+                    }
+                } else if (node.nodeType === 1 && !node.classList.contains('lm-op-tag')) {
+                    for (let child of node.childNodes) walkCheck(child);
+                }
+            };
+            walkCheck(el);
+        }
+
+        if (!needsFormat) return false;
+
+        const caretOffset = this.getRichCaretOffset(el);
+        const val = this.getRichInputValue(el);
+        this.setRichInputValue(el, val);
+        this.setRichCaretOffset(el, caretOffset);
+        return true;
+    },
+
+    getRichCaretOffset(el) {
+        const sel = window.getSelection();
+        if (!sel || !sel.rangeCount) return 0;
+        const range = sel.getRangeAt(0);
+        if (!el.contains(range.startContainer)) return 0;
+        const preRange = range.cloneRange();
+        preRange.selectNodeContents(el);
+        preRange.setEnd(range.startContainer, range.startOffset);
+        return preRange.toString().length;
+    },
+
+    setRichCaretOffset(el, offset) {
+        const sel = window.getSelection();
+        if (!sel) return;
+        const range = document.createRange();
+        let currentPos = 0;
+        let nodeStack = [el], node, found = false;
+
+        while (!found && (node = nodeStack.pop())) {
+            if (node.nodeType === 3) {
+                const nextPos = currentPos + node.length;
+                if (offset >= currentPos && offset <= nextPos) {
+                    const pos = Math.min(node.length, Math.max(0, offset - currentPos));
+                    range.setStart(node, pos);
+                    range.setEnd(node, pos);
+                    found = true;
+                }
+                currentPos = nextPos;
+            } else if (node.nodeType === 1 && node.classList.contains('lm-op-tag')) {
+                const nextPos = currentPos + 1;
+                if (offset === currentPos || offset === nextPos) {
+                    range.setStartAfter(node);
+                    range.setEndAfter(node);
+                    found = true;
+                }
+                currentPos = nextPos;
+            } else {
+                let i = node.childNodes.length;
+                while (i--) {
+                    nodeStack.push(node.childNodes[i]);
+                }
+            }
+        }
+        if (!found) {
+            range.selectNodeContents(el);
+            range.collapse(false);
+        }
+        sel.removeAllRanges();
+        sel.addRange(range);
+    },
+
+    handleRichKeydown(event, el) {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            return;
+        }
+        if (event.key === 'Backspace') {
+            const sel = window.getSelection();
+            if (sel && sel.rangeCount) {
+                const range = sel.getRangeAt(0);
+                if (range.collapsed) {
+                    const node = range.startContainer;
+                    const offset = range.startOffset;
+                    if (node.nodeType === 3 && offset === 0 && node.previousSibling && node.previousSibling.classList?.contains('lm-op-tag')) {
+                        event.preventDefault();
+                        node.previousSibling.remove();
+                        this.triggerSearchFromElement(el);
+                        return;
+                    }
+                    if (node.nodeType === 1 && offset > 0) {
+                        const targetChild = node.childNodes[offset - 1];
+                        if (targetChild && targetChild.classList?.contains('lm-op-tag')) {
+                            event.preventDefault();
+                            targetChild.remove();
+                            this.triggerSearchFromElement(el);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    },
+
+    handleRichCopy(event, el) {
+        if (!el) return;
+        const sel = window.getSelection();
+        if (!sel || sel.isCollapsed) return;
+
+        const range = sel.getRangeAt(0);
+        const fullText = this.getRichInputValue(el).replace(/[\u200B\u00A0]/g, ' ').trim();
+        const selectedText = sel.toString().replace(/[\u200B\u00A0]/g, ' ').trim();
+
+        // 当全选或选区从最开始节点延伸时，确保克隆包含首个标签在内的所有内容
+        const isSelectAll = (selectedText.length >= fullText.length - 2) ||
+                            (range.startContainer === el && range.startOffset <= 1) ||
+                            (range.startContainer === el.firstChild) ||
+                            (el.firstChild && el.firstChild.contains(range.startContainer));
+
+        const container = document.createElement('div');
+        if (isSelectAll) {
+            container.innerHTML = el.innerHTML;
+        } else {
+            for (let i = 0; i < sel.rangeCount; i++) {
+                container.appendChild(sel.getRangeAt(i).cloneContents());
+            }
+        }
+
+        let text = '';
+        const walk = (node) => {
+            if (node.nodeType === 3) {
+                text += node.nodeValue;
+            } else if (node.nodeType === 1) {
+                if (node.classList.contains('lm-op-tag')) {
+                    const op = node.getAttribute('data-op') || node.textContent.trim();
+                    text += `${op} `;
+                } else {
+                    for (let child of node.childNodes) walk(child);
+                }
+            }
+        };
+        walk(container);
+
+        const cleanText = text.replace(/[\u200B\u00A0]/g, ' ').replace(/\s+/g, ' ').trim();
+        if (cleanText) {
+            event.preventDefault();
+            (event.clipboardData || window.clipboardData)?.setData('text/plain', cleanText);
+            if (event.type === 'cut') {
+                if (isSelectAll) {
+                    el.innerHTML = '';
+                } else {
+                    document.execCommand('delete');
+                }
+                this.formatRichInput(el, true);
+                this.triggerSearchFromElement(el);
+            }
+        }
+    },
+
+    handleRichPaste(event, el) {
+        if (!el) return;
+        event.preventDefault();
+        const text = (event.clipboardData || window.clipboardData)?.getData('text/plain') || '';
+        if (!text) return;
+
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount) {
+            const range = sel.getRangeAt(0);
+            range.deleteContents();
+            const textNode = document.createTextNode(text);
+            range.insertNode(textNode);
+            range.setStartAfter(textNode);
+            range.setEndAfter(textNode);
+            sel.removeAllRanges();
+            sel.addRange(range);
+        } else {
+            const curVal = this.getRichInputValue(el);
+            this.setRichInputValue(el, curVal + text);
+        }
+
+        this.formatRichInput(el, true);
+        this.triggerSearchFromElement(el);
+    },
+
+    triggerSearchFromElement(el) {
+        if (!el) return;
+        if (el.id === 'lm-quick-search') {
+            this.handleQuickSearch({ target: el });
+        } else if (el.id === 'lm-search-input') {
+            this.applyFilters();
+        } else if (el.id === 'lm-remaster-search') {
+            this.setRemasterSearch(el);
+        }
+    },
+
+    hasSearchSyntaxError(expression) {
+        const rawStr = String(expression || '').trim();
+        if (!rawStr) return false;
+        const tokens = this.tokenizeSearchExpression(rawStr);
+        if (!tokens || !tokens.length) return false;
+        const hasOperators = tokens.some(t => t.type !== 'term');
+        if (!hasOperators) return false;
+        return this.parseSearchExpression(rawStr) === null;
+    },
+
+    updateSearchInputErrorState(el, keyword) {
+        if (!el) return;
+        const isError = this.hasSearchSyntaxError(keyword);
+        if (isError) {
+            el.classList.add('lm-search-input-error');
+            el.title = '布尔表达式语法错误（例如：括号未闭合、缺少逻辑关键词等）';
+        } else {
+            el.classList.remove('lm-search-input-error');
+            el.title = '';
+        }
     },
 
     parseSearchExpression(expression) {
@@ -283,7 +608,7 @@ window.LocalMusicManager = {
                 this.selectedSubPath = filters.selectedSubPath || '';
 
                 // Update UI elements
-                if (document.getElementById('lm-search-input')) document.getElementById('lm-search-input').value = this.searchKeyword;
+                if (document.getElementById('lm-search-input')) this.setRichInputValue(document.getElementById('lm-search-input'), this.searchKeyword);
                 if (document.getElementById('lm-sort-by')) document.getElementById('lm-sort-by').value = this.sortBy;
                 if (document.getElementById('lm-sort-order')) document.getElementById('lm-sort-order').value = this.sortOrder;
                 if (document.getElementById('lm-folder-select')) {
@@ -374,8 +699,10 @@ window.LocalMusicManager = {
         const btn = document.getElementById('lm-public-songs-btn');
         if (!btn) return;
         const enablePublicFavorites = !!window.lx_config?.['user.enablePublicFavorites'];
+        const enablePublicNonAdminAccess = !!window.lx_config?.['user.enablePublicNonAdminAccess'];
+        const isAdmin = !!localStorage.getItem('lx_admin_password');
         const isLoggedIn = typeof window.isUserLoggedIn === 'function' ? window.isUserLoggedIn() : false;
-        if (enablePublicFavorites && isLoggedIn) {
+        if (enablePublicFavorites && (isLoggedIn || isAdmin || enablePublicNonAdminAccess)) {
             btn.classList.remove('hidden');
             if (this.isViewingPublicSongs) {
                 btn.className = 'text-[9px] md:text-[10px] font-bold px-2 py-0.5 rounded-lg bg-emerald-500 text-white shadow-sm transition-all flex items-center gap-1 order-4 md:order-3 cursor-pointer';
@@ -503,7 +830,11 @@ window.LocalMusicManager = {
     },
 
     handleQuickSearch(e) {
-        this.quickSearchKeyword = (e.target.value || '').trim().toLowerCase();
+        const el = e?.target || document.getElementById('lm-quick-search');
+        if (el) this.formatRichInput(el);
+        const val = this.getRichInputValue(el);
+        this.updateSearchInputErrorState(el, val);
+        this.quickSearchKeyword = val.trim().toLowerCase();
         this.applyFilters();
     },
 
@@ -518,9 +849,15 @@ window.LocalMusicManager = {
         this.sortOrder = 'desc';
 
         const si = document.getElementById('lm-search-input');
-        if (si) si.value = '';
+        if (si) {
+            this.setRichInputValue(si, '');
+            this.updateSearchInputErrorState(si, '');
+        }
         const qs = document.getElementById('lm-quick-search');
-        if (qs) qs.value = '';
+        if (qs) {
+            this.setRichInputValue(qs, '');
+            this.updateSearchInputErrorState(qs, '');
+        }
         const sortBy = document.getElementById('lm-sort-by');
         if (sortBy) sortBy.value = 'mtime';
         const sortOrder = document.getElementById('lm-sort-order');
@@ -550,7 +887,34 @@ window.LocalMusicManager = {
         this.resetFilters();
     },
 
+    showNoPermissionState() {
+        this.originalData = [];
+        this.displayData = [];
+        this.updatePagination();
+        const countEl = document.getElementById('lm-total-count');
+        if (countEl) countEl.innerText = '0 首';
+        const container = document.getElementById('lm-list-container');
+        if (container) {
+            container.innerHTML = `
+                <div class="text-center py-20 text-gray-500 animate-fade-in">
+                    <i class="fas fa-lock text-4xl mb-4 text-amber-500/80"></i>
+                    <p class="font-bold tracking-wider text-base t-text-main mb-1">您没有权限查看此目录，请联系管理员设置</p>
+                </div>`;
+        }
+        const pagination = document.getElementById('lm-pagination');
+        if (pagination) pagination.classList.add('hidden');
+    },
+
     async fetchData(silent = false) {
+        const isLoggedIn = typeof window.isUserLoggedIn === 'function' ? window.isUserLoggedIn() : false;
+        const isAdmin = !!localStorage.getItem('lx_admin_password');
+        const enablePublicNonAdminLocalMusic = !!window.lx_config?.['user.enablePublicNonAdminLocalMusic'];
+
+        if (!isLoggedIn && !isAdmin && !enablePublicNonAdminLocalMusic) {
+            this.showNoPermissionState();
+            return;
+        }
+
         if (!silent) {
             const container = document.getElementById('lm-list-container');
             if (container) {
@@ -635,7 +999,12 @@ window.LocalMusicManager = {
 
         // 2. Read current filter values from input
         const searchInput = document.getElementById('lm-search-input');
-        if (searchInput) this.searchKeyword = searchInput.value.trim().toLowerCase();
+        if (searchInput) {
+            this.formatRichInput(searchInput);
+            const val = this.getRichInputValue(searchInput);
+            this.updateSearchInputErrorState(searchInput, val);
+            this.searchKeyword = val.trim().toLowerCase();
+        }
 
         const sortBySelect = document.getElementById('lm-sort-by');
         if (sortBySelect) this.sortBy = sortBySelect.value;
@@ -1327,20 +1696,28 @@ window.LocalMusicManager = {
             if (typeof showError === 'function') showError('文件信息已失效，请刷新后重试');
             return;
         }
+
+        // 未登录个人账号 或 查看公开库 时删除文件需要管理员权限
+        const isLoggedIn = typeof window.isUserLoggedIn === 'function' ? window.isUserLoggedIn() : false;
+        const isAdmin = !!localStorage.getItem('lx_admin_password');
+        const requiresAdmin = this.isViewingPublicSongs || !isLoggedIn;
+
+        if (requiresAdmin && !isAdmin) {
+            if (typeof handleAdminAuth === 'function') {
+                const ok = await handleAdminAuth(this.isViewingPublicSongs ? '删除公开库中的文件需要管理员权限' : '删除本地歌曲需要验证管理员权限');
+                if (!ok) return;
+            } else {
+                if (typeof showError === 'function') showError('删除本地歌曲需要管理员权限');
+                return;
+            }
+        }
+
         if (typeof showSelect === 'function') {
             if (!(await showSelect('删除本地文件', '确定要删除此文件吗?', { danger: true }))) return;
         } else {
             if (!confirm('确定要删除此文件吗?')) return;
         }
-        // 公开歌曲库删除需要管理员权限
-        if (this.isViewingPublicSongs) {
-            if (!localStorage.getItem('lx_admin_password')) {
-                if (typeof handleAdminAuth === 'function') {
-                    const ok = await handleAdminAuth('删除公开库中的文件需要管理员权限');
-                    if (!ok) return;
-                } else { return; }
-            }
-        }
+
         this._executeDelete([item]);
     },
 
@@ -1349,20 +1726,28 @@ window.LocalMusicManager = {
             if (typeof showError === 'function') showError('请先选择要删除的文件');
             return;
         }
+
+        // 未登录个人账号 或 查看公开库 时删除文件需要管理员权限
+        const isLoggedIn = typeof window.isUserLoggedIn === 'function' ? window.isUserLoggedIn() : false;
+        const isAdmin = !!localStorage.getItem('lx_admin_password');
+        const requiresAdmin = this.isViewingPublicSongs || !isLoggedIn;
+
+        if (requiresAdmin && !isAdmin) {
+            if (typeof handleAdminAuth === 'function') {
+                const ok = await handleAdminAuth(this.isViewingPublicSongs ? '批量删除公开库中的文件需要管理员权限' : '批量删除本地歌曲需要验证管理员权限');
+                if (!ok) return;
+            } else {
+                if (typeof showError === 'function') showError('批量删除本地歌曲需要管理员权限');
+                return;
+            }
+        }
+
         if (typeof showSelect === 'function') {
             if (!(await showSelect('删除本地文件', `确定要批量删除这 ${this.selectedItems.size} 个文件吗?`, { danger: true }))) return;
         } else {
             if (!confirm(`确定要删除 ${this.selectedItems.size} 个文件吗?`)) return;
         }
-        // 公开歌曲库删除需要管理员权限
-        if (this.isViewingPublicSongs) {
-            if (!localStorage.getItem('lx_admin_password')) {
-                if (typeof handleAdminAuth === 'function') {
-                    const ok = await handleAdminAuth('批量删除公开库中的文件需要管理员权限');
-                    if (!ok) return;
-                } else { return; }
-            }
-        }
+
         this._executeDelete(this.getSelectedEntries());
     },
 
@@ -1372,8 +1757,9 @@ window.LocalMusicManager = {
                 'Content-Type': 'application/json',
                 ...(window.getUserAuthHeaders ? window.getUserAuthHeaders() : {})
             };
-            if (this.isViewingPublicSongs) {
-                headers['x-user-name'] = 'default';
+            const isLoggedIn = typeof window.isUserLoggedIn === 'function' ? window.isUserLoggedIn() : false;
+            if (this.isViewingPublicSongs || !isLoggedIn) {
+                headers['x-user-name'] = '_open';
                 delete headers['x-user-token'];
                 delete headers['x-user-password'];
             }
@@ -2398,8 +2784,16 @@ window.LocalMusicManager = {
         }
     },
 
-    setRemasterSearch(value) {
-        this.remasterSearchKeyword = String(value || '').trim().toLowerCase();
+    setRemasterSearch(valueOrEl) {
+        const el = typeof valueOrEl === 'string' ? null : (valueOrEl || document.getElementById('lm-remaster-search'));
+        if (el) {
+            this.formatRichInput(el);
+            const val = this.getRichInputValue(el);
+            this.updateSearchInputErrorState(el, val);
+            this.remasterSearchKeyword = val.trim().toLowerCase();
+        } else {
+            this.remasterSearchKeyword = String(valueOrEl || '').trim().toLowerCase();
+        }
         this.remasterSelectionPage = 1;
         this.renderRemasterSelection();
     },
@@ -2449,7 +2843,7 @@ window.LocalMusicManager = {
         if (pageInfo) pageInfo.textContent = `${this.remasterSelectionPage} / ${totalPages}`;
         if (prevButton) prevButton.disabled = disabled || this.remasterSelectionPage <= 1;
         if (nextButton) nextButton.disabled = disabled || this.remasterSelectionPage >= totalPages;
-        if (searchInput) searchInput.disabled = disabled;
+        if (searchInput) searchInput.setAttribute('contenteditable', disabled ? 'false' : 'true');
         if (selectAllButton) selectAllButton.disabled = disabled || filtered.length === 0;
         if (clearButton) clearButton.disabled = disabled || this.remasterSelectedItems.size === 0;
         if (startButton) startButton.disabled = disabled || this.remasterSelectedItems.size === 0;

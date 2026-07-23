@@ -366,7 +366,17 @@ window.isPublicLibraryContext = isPublicLibraryContext;
 
 async function fetchPublicListData() {
     const enablePublicFavorites = !!window.lx_config?.['user.enablePublicFavorites'];
+    const enablePublicNonAdminAccess = !!window.lx_config?.['user.enablePublicNonAdminAccess'];
+    const isAdmin = !!localStorage.getItem('lx_admin_password');
+    const isUserLoggedIn = typeof window.isUserLoggedIn === 'function' ? window.isUserLoggedIn() : false;
+
     if (!enablePublicFavorites) return false;
+
+    // 如果开启了公开收藏，但没开启非管理员访问，且既没登录个人账号也没登录管理员，则不可访问公开收藏
+    if (!enablePublicNonAdminAccess && !isAdmin && !isUserLoggedIn) {
+        console.log('[PublicList] 未开启非管理员访问且未登录管理员/个人账号，禁止加载公开歌单');
+        return false;
+    }
 
     try {
         console.log('[PublicList] 正在获取 _open 公共歌单数据...');
@@ -569,32 +579,31 @@ function updateUserUI() {
 window.updateUserUI = updateUserUI;
 
 /**
- * 顶部栏退出登录处理 (带确认弹窗)
+ * 顶部栏退出登录处理 (带确认弹窗与全量缓存清理)
  */
 async function handleHeaderLogout(e) {
     if (e) e.stopPropagation();
-    
-    const confirmed = await showSelect('退出同步账号', '确定要退出当前账号并清除同步凭证吗？', { danger: true });
-    if (confirmed) {
-        // [核心优化] 直接调用 handleSyncLogout 即可复用所有清除逻辑和 UI 更新逻辑
-        if (typeof handleSyncLogout === 'function') {
-            await handleSyncLogout();
-        } else {
-            // 后备方案 (如果 handleSyncLogout 未定义)
-            localStorage.removeItem('lx_user_token');
-            localStorage.removeItem('lx_sync_user');
-            localStorage.removeItem('lx_sync_pass');
-            userToken = null;
-        }
-        
-        showSuccess('已安全退出登录');
-        
-        // 更新 UI 状态
-        if (typeof updateUserUI === 'function') updateUserUI();
-        
-        // [可选] 如果当前在我的收藏页面，可能需要刷新列表
-        if (typeof renderMyLists === 'function') {
-            renderMyLists(null);
+    if (typeof handleSyncLogout === 'function') {
+        await handleSyncLogout(false);
+    } else {
+        const confirmed = typeof showSelect === 'function'
+            ? await showSelect('退出同步账号', '确定要退出当前账号并清除同步凭证？', { danger: true })
+            : confirm('确定要退出当前账号并清除同步凭证？');
+        if (confirmed) {
+            try {
+                if (window.ListStore && typeof window.ListStore.remove === 'function') {
+                    await window.ListStore.remove().catch(() => {});
+                }
+                if ('caches' in window) {
+                    const keys = await caches.keys();
+                    await Promise.all(keys.map(k => caches.delete(k)));
+                }
+            } catch (err) {}
+            const agreementAccepted = localStorage.getItem('lx_agreement_accepted');
+            localStorage.clear();
+            sessionStorage.clear();
+            if (agreementAccepted) localStorage.setItem('lx_agreement_accepted', agreementAccepted);
+            window.location.reload();
         }
     }
 }
@@ -649,10 +658,13 @@ window.handleHeaderLogout = handleHeaderLogout;
             }
         }
 
-        // [新增] 检查公开收藏功能：若无账号登录且开启了公开收藏，拉取公共歌单作预览/管理
+        // [新增] 检查公开收藏功能：若无账号登录且开启了公开收藏，尝试拉取公共歌单
         if (config['user.enablePublicFavorites'] && !isUserLoggedIn()) {
             console.log('[Auth] 检测到已开启公开收藏且无账号登录，正在拉取公共歌单...');
-            await fetchPublicListData();
+            const loaded = await fetchPublicListData();
+            if (!loaded) {
+                renderMyLists(null);
+            }
         }
 
         // [新增] 客户端模式自动连接远程同步 (仅在已登录到本地账户时触发，防止 _open 访客同步)
@@ -674,13 +686,34 @@ window.handleHeaderLogout = handleHeaderLogout;
     }
 })();
 
-// 登出：调用服务端清除 Session，跳转到登录页
+// 登出：调用服务端清除 Session，清除本地全量缓存，跳转到登录页
 async function handleLogout() {
     try {
         await fetch('/api/music/auth/logout', { method: 'POST' });
     } catch (e) {
         console.error('[Auth] 登出请求失败:', e);
     }
+
+    try {
+        if (typeof audio !== 'undefined' && audio) {
+            audio.pause();
+            audio.currentTime = 0;
+            audio.src = '';
+        }
+        if (window.ListStore && typeof window.ListStore.remove === 'function') {
+            await window.ListStore.remove().catch(() => {});
+        }
+        if ('caches' in window) {
+            const keys = await caches.keys();
+            await Promise.all(keys.map(k => caches.delete(k)));
+        }
+    } catch (e) {}
+
+    const agreementAccepted = localStorage.getItem('lx_agreement_accepted');
+    localStorage.clear();
+    sessionStorage.clear();
+    if (agreementAccepted) localStorage.setItem('lx_agreement_accepted', agreementAccepted);
+
     const playerPath = (window.CONFIG && window.CONFIG['player.path']) || (window.lx_config && window.lx_config['player.path']) || '/music';
     const normalizedPlayerPath = (playerPath === '/' || playerPath === '') ? '' : playerPath.replace(/\/+$/, '');
     window.location.replace(`${normalizedPlayerPath}/login`);
@@ -3903,6 +3936,9 @@ async function handleAdminLogin() {
                 await loadLibraryData();
             }
         }
+        if (typeof window.LocalMusicManager?.fetchData === 'function') {
+            window.LocalMusicManager.fetchData(true);
+        }
         // 已登录用户账号时：不改变当前展示列表，管理员密码仅用于操作授权
     }
 }
@@ -3917,11 +3953,19 @@ async function handleAdminLogout() {
 
     // [核心新增] 如果当前使用的是 _open 公共列表，登出管理员后锁定列表显示
     if (window.lx_config?.['user.enablePublicFavorites'] && (!userToken || !localStorage.getItem('lx_sync_user'))) {
-        currentListData = null;
-        window.currentListData = null;
-        if (typeof renderMyLists === 'function') {
-            renderMyLists(null);
+        const enablePublicNonAdminAccess = !!window.lx_config?.['user.enablePublicNonAdminAccess'];
+        if (!enablePublicNonAdminAccess) {
+            currentListData = null;
+            window.currentListData = null;
+            if (typeof renderMyLists === 'function') {
+                renderMyLists(null);
+            }
+        } else {
+            fetchPublicListData();
         }
+    }
+    if (typeof window.LocalMusicManager?.fetchData === 'function') {
+        window.LocalMusicManager.fetchData(true);
     }
 
     showSuccess('管理员已登出');
@@ -8625,55 +8669,101 @@ function updateSyncStatus(html, showLogout = true) {
     if (typeof updateAdminUI === 'function') updateAdminUI();
 }
 
-async function handleSyncLogout() {
-    // [新增] 造访调用服务端注销 Token
-    if (userToken) {
-        try {
-            await fetch('/api/user/logout', {
-                method: 'POST',
-                headers: { 'x-user-token': userToken }
-            });
-        } catch (e) { console.warn('[Auth] Token 注销失败:', e); }
-        localStorage.removeItem('lx_user_token');
-        userToken = null;
+async function handleSyncLogout(skipConfirm = false) {
+    if (!skipConfirm) {
+        const confirmed = typeof showSelect === 'function' 
+            ? await showSelect('退出同步账号', '确定要退出当前账号并清除同步凭证？', { danger: true })
+            : confirm('确定要退出当前账号并清除同步凭证？');
+        if (!confirmed) return;
     }
 
-    if (syncManager && syncManager.client && typeof syncManager.client.close === 'function') {
-        syncManager.client.close();
-    }
+    try {
+        // 1. 服务端注销 Token
+        if (userToken) {
+            try {
+                await fetch('/api/user/logout', {
+                    method: 'POST',
+                    headers: { 'x-user-token': userToken }
+                });
+            } catch (e) { console.warn('[Auth] Token 注销失败:', e); }
+            userToken = null;
+        }
 
-    currentListData = null;
-    window.myPersonalListData = null;
-    window.isViewingPublicFavorites = false;
-    localStorage.removeItem('lx_sync_mode');
-    localStorage.removeItem('lx_sync_user');
-    localStorage.removeItem('lx_sync_pass');
-    localStorage.removeItem('lx_sync_url');
-    localStorage.removeItem('lx_sync_code');
-    localStorage.removeItem('lx_ws_auth');
-    window.ListStore.remove().catch(e => console.warn('[IDBStore] 清除失败:', e));
+        // 2. 关闭 WebSocket 同步连接
+        if (syncManager && syncManager.client && typeof syncManager.client.close === 'function') {
+            syncManager.client.close();
+        }
 
-    // Clear forms
-    const localUser = document.getElementById('sync-local-user');
-    const localPass = document.getElementById('sync-local-pass');
-    const remoteUrl = document.getElementById('sync-remote-url');
-    const remoteCode = document.getElementById('sync-remote-code');
-    if (localUser) localUser.value = '';
-    if (localPass) localPass.value = '';
-    if (remoteUrl) remoteUrl.value = '';
-    if (remoteCode) remoteCode.value = '';
+        // 3. 停止音频播放及歌词，清空内存播放状态
+        if (typeof audio !== 'undefined' && audio) {
+            try {
+                audio.pause();
+                audio.currentTime = 0;
+                audio.src = '';
+            } catch (e) {}
+        }
+        if (typeof lyricPlayer !== 'undefined' && lyricPlayer && typeof lyricPlayer.stop === 'function') {
+            try { lyricPlayer.stop(); } catch (e) {}
+        }
 
-    // Reset UI Status (no logout button here)
-    updateSyncStatus('<i class="fas fa-circle text-[8px] text-gray-300"></i> 状态: 未连接', false);
+        window.currentSong = null;
+        if (typeof currentSong !== 'undefined') currentSong = null;
+        window.playlist = [];
+        if (typeof playlist !== 'undefined') playlist = [];
+        if (typeof playHistory !== 'undefined') playHistory = [];
 
-    // [新增] 同步更新顶部栏 UI
-    if (typeof updateUserUI === 'function') updateUserUI();
+        // 4. 重置内存歌单数据
+        currentListData = null;
+        window.currentListData = null;
+        window.myPersonalListData = null;
+        window.publicListData = null;
+        window.isViewingPublicFavorites = false;
 
-    // Clear sidebar lists
-    renderMyLists({ defaultList: [], loveList: [], userList: [] });
+        // 5. 清理 IndexedDB 数据
+        if (window.ListStore && typeof window.ListStore.remove === 'function') {
+            await window.ListStore.remove().catch(e => console.warn('[IDBStore] 清除失败:', e));
+        }
 
-    if (typeof showSuccess === 'function') {
-        showSuccess('已退出登录并清除同步数据');
+        // 6. 清理 CacheStorage 物理缓存 (如 Service Worker / Audio Cache)
+        if ('caches' in window) {
+            try {
+                const keys = await caches.keys();
+                await Promise.all(keys.map(key => caches.delete(key)));
+            } catch (e) {
+                console.warn('[Cache] 物理缓存删除失败:', e);
+            }
+        }
+
+        // 7. 彻底清空 localStorage & sessionStorage
+        const agreementAccepted = localStorage.getItem('lx_agreement_accepted');
+        localStorage.clear();
+        sessionStorage.clear();
+        if (agreementAccepted) {
+            localStorage.setItem('lx_agreement_accepted', agreementAccepted);
+        }
+
+        // Clear forms if they exist in DOM
+        const localUser = document.getElementById('sync-local-user');
+        const localPass = document.getElementById('sync-local-pass');
+        const remoteUrl = document.getElementById('sync-remote-url');
+        const remoteCode = document.getElementById('sync-remote-code');
+        if (localUser) localUser.value = '';
+        if (localPass) localPass.value = '';
+        if (remoteUrl) remoteUrl.value = '';
+        if (remoteCode) remoteCode.value = '';
+
+        if (typeof showSuccess === 'function') {
+            showSuccess('已安全退出登录并清除所有缓存，正在刷新页面...');
+        }
+
+        // 8. 自动刷新网页
+        setTimeout(() => {
+            window.location.reload();
+        }, 300);
+
+    } catch (err) {
+        console.error('[Logout] 清除缓存或退出过程出错:', err);
+        window.location.reload();
     }
 }
 
@@ -9546,17 +9636,24 @@ async function handleRenameList(listId, event) {
     }
     if (nextName === list.name) return;
 
-    list.name = nextName;
-    await pushDataChange();
-    renderMyLists(currentListData);
+    if (!(await requireAdminForOpenWrite('重命名公开歌单'))) return;
 
-    if (typeof renderPlaylistAddGrid === 'function' && !document.getElementById('playlist-add-modal')?.classList.contains('hidden')) {
-        renderPlaylistAddGrid();
+    list.name = nextName;
+    try {
+        await pushDataChange();
+        renderMyLists(currentListData);
+
+        if (typeof renderPlaylistAddGrid === 'function' && !document.getElementById('playlist-add-modal')?.classList.contains('hidden')) {
+            renderPlaylistAddGrid();
+        }
+        if (window.currentSearchScope === 'local_list' && window.currentViewingListId === listId) {
+            handleListClick(listId, true);
+        }
+        showSuccess('歌单名称已更新');
+    } catch (e) {
+        console.error('Rename list failed:', e);
+        showError('重命名失败，请重试');
     }
-    if (window.currentSearchScope === 'local_list' && window.currentViewingListId === listId) {
-        handleListClick(listId, true);
-    }
-    showSuccess('歌单名称已更新');
 }
 
 function formatSongToLxMusicStandard(item) {

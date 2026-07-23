@@ -1041,10 +1041,14 @@
                             <div
                                 class="relative group flex-1 max-w-[150px] md:max-w-[200px] order-4 md:order-3 ml-auto md:ml-0">
                                 <i
-                                    class="fas fa-search absolute left-2 top-1/2 -translate-y-1/2 t-text-muted text-[10px]"></i>
-                                <input type="text" id="lm-quick-search" placeholder="快速搜索..."
+                                    class="fas fa-search absolute left-2 top-1/2 -translate-y-1/2 t-text-muted text-[10px] pointer-events-none z-10"></i>
+                                <div id="lm-quick-search" contenteditable="true" data-placeholder="快速搜索 (加空格使用 & | ! 逻辑)..."
                                     oninput="window.LocalMusicManager.handleQuickSearch(event)"
-                                    class="w-full bg-gray-100 dark:bg-gray-800 border-none rounded-lg pl-7 pr-2 py-1 md:py-1.5 text-[10px] md:text-xs focus:ring-1 focus:ring-emerald-500/30">
+                                    onkeydown="window.LocalMusicManager.handleRichKeydown(event, this)"
+                                    onpaste="window.LocalMusicManager.handleRichPaste(event, this)"
+                                    oncopy="window.LocalMusicManager.handleRichCopy(event, this)"
+                                    oncut="window.LocalMusicManager.handleRichCopy(event, this)"
+                                    class="lm-rich-search-input w-full bg-gray-100 dark:bg-gray-800 border-none rounded-lg pl-7 pr-2 py-1 md:py-1.5 text-[10px] md:text-xs focus:ring-1 focus:ring-emerald-500/30 outline-none overflow-x-auto whitespace-nowrap min-h-[26px] flex items-center"></div>
                             </div>
 
                             <div class="hidden md:flex items-center gap-1 order-5 md:order-4">
@@ -1082,14 +1086,20 @@
                             <div class="flex flex-col md:grid md:grid-cols-4 gap-1.5 md:gap-2 relative z-10">
                                 <!-- 关键词搜索 -->
                                 <div class="md:col-span-2 flex items-center gap-2 shrink-0">
-                                    <label
-                                        class="text-[9px] md:text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest ml-1 min-w-[35px] md:min-w-[45px]">搜索</label>
+                                    <div class="flex items-center gap-1 min-w-[35px] md:min-w-[45px] ml-1">
+                                        <label class="text-[9px] md:text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest">搜索</label>
+                                        <span class="text-[9px] t-text-muted hover:text-emerald-500 transition-colors cursor-help shrink-0" title="布尔搜索语法提示：&#10;在符号后按空格自动激活为方框标签：&#10;&  与  |  或  !  非  ( )  括号&#10;示例：( 周杰伦 | 蔡依林 ) & ! Live"><i class="fas fa-question-circle text-emerald-500/80"></i></span>
+                                    </div>
                                     <div class="relative group flex-1">
                                         <i
-                                            class="fas fa-search absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-emerald-500 text-[9px] md:text-[10px]"></i>
-                                        <input type="text" id="lm-search-input" placeholder="歌曲/歌手/专辑..."
+                                            class="fas fa-search absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-emerald-500 text-[9px] md:text-[10px] pointer-events-none z-10"></i>
+                                        <div id="lm-search-input" contenteditable="true" data-placeholder="搜索歌曲/歌手/专辑... (加空格激活: & 与 | 或 ! 非 () 括号，例: ! 周杰伦 & ! Live)"
                                             oninput="window.LocalMusicManager.applyFilters()"
-                                            class="w-full bg-black/5 dark:bg-black/20 md:bg-white/60 md:dark:bg-gray-900 border t-border-main rounded-lg pl-7 pr-2 py-0.5 md:py-1 text-[10px] focus:ring-1 focus:ring-emerald-500/30 outline-none t-text-main">
+                                            onkeydown="window.LocalMusicManager.handleRichKeydown(event, this)"
+                                            onpaste="window.LocalMusicManager.handleRichPaste(event, this)"
+                                            oncopy="window.LocalMusicManager.handleRichCopy(event, this)"
+                                            oncut="window.LocalMusicManager.handleRichCopy(event, this)"
+                                            class="lm-rich-search-input w-full bg-black/5 dark:bg-black/20 md:bg-white/60 md:dark:bg-gray-900 border t-border-main rounded-lg pl-7 pr-2 py-0.5 md:py-1 text-[10px] focus:ring-1 focus:ring-emerald-500/30 outline-none t-text-main overflow-x-auto whitespace-nowrap min-h-[26px] flex items-center"></div>
                                     </div>
                                 </div>
 
@@ -4839,10 +4849,14 @@
                     </div>
                     <div class="p-2 border-b t-border-main">
                         <div class="relative">
-                            <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-[10px] t-text-muted"></i>
-                            <input id="lm-remaster-search" type="search" oninput="LocalMusicManager.setRemasterSearch(this.value)"
-                                class="w-full h-9 pl-8 pr-3 t-bg-main border t-border-main rounded-md text-xs focus:outline-none focus:ring-2 focus:ring-red-500/30"
-                                placeholder="搜索歌曲、歌手、专辑或音质">
+                            <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-[10px] t-text-muted pointer-events-none z-10"></i>
+                            <div id="lm-remaster-search" contenteditable="true" data-placeholder="搜索歌曲、歌手、专辑或音质... (加空格激活 & | ! 逻辑)"
+                                oninput="LocalMusicManager.setRemasterSearch(this)"
+                                onkeydown="LocalMusicManager.handleRichKeydown(event, this)"
+                                onpaste="LocalMusicManager.handleRichPaste(event, this)"
+                                oncopy="LocalMusicManager.handleRichCopy(event, this)"
+                                oncut="LocalMusicManager.handleRichCopy(event, this)"
+                                class="lm-rich-search-input w-full h-9 pl-8 pr-3 t-bg-main border t-border-main rounded-md text-xs focus:outline-none focus:ring-2 focus:ring-red-500/30 overflow-x-auto whitespace-nowrap flex items-center"></div>
                         </div>
                     </div>
                     <div id="lm-remaster-song-list" class="h-52 overflow-y-auto custom-scrollbar">

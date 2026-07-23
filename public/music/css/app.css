@@ -981,3 +981,53 @@ aside {
 .subpath-btn-inactive:hover span {
     color: var(--c-500) !important;
 }
+
+/* ── 搜索框布尔运算符标签 (方框浅色字符) ── */
+.lm-op-tag {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 5px;
+    margin: 0 2px;
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-weight: 700;
+    font-size: 11px;
+    line-height: 1.4;
+    user-select: none;
+    background-color: color-mix(in srgb, var(--c-500) 12%, var(--bg-panel));
+    color: var(--c-600);
+    border: 1px solid color-mix(in srgb, var(--c-500) 40%, transparent);
+    vertical-align: middle;
+}
+:root[data-appearance="dark"] .lm-op-tag,
+.dark .lm-op-tag {
+    background-color: color-mix(in srgb, var(--c-500) 22%, transparent);
+    color: var(--c-300);
+    border-color: color-mix(in srgb, var(--c-500) 50%, transparent);
+}
+
+.lm-rich-search-input:empty::before {
+    content: attr(data-placeholder);
+    color: var(--text-muted);
+    opacity: 0.65;
+    pointer-events: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: inline-block;
+    max-width: 100%;
+}
+
+/* ── 搜索框语法错误红框高亮 ── */
+.lm-search-input-error {
+    border-color: #ef4444 !important;
+    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.35) !important;
+}
+:root[data-appearance="dark"] .lm-search-input-error,
+.dark .lm-search-input-error {
+    border-color: #f87171 !important;
+    box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.4) !important;
+}
+
+

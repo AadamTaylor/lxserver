@@ -1888,8 +1888,13 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
         const isAdmin = !!(auth && auth === global.lx.config['frontend.password'])
         let username: string | null = null
 
-        if (targetUserParam === '_open' || reqUsername === '_open' || (!reqUsername && !verifyUserAuth(req) && global.lx.config['user.enablePublicFavorites'])) {
-          username = '_open'
+        const canAccessOpen = global.lx.config['user.enablePublicFavorites'] && (
+          global.lx.config['user.enablePublicNonAdminAccess'] || isAdmin || !!verifyUserAuth(req)
+        )
+        if (targetUserParam === '_open' || reqUsername === '_open' || (!reqUsername && !verifyUserAuth(req))) {
+          if (canAccessOpen) {
+            username = '_open'
+          }
         }
         if (!username) {
           username = verifyUserAuth(req)
@@ -1927,8 +1932,16 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
         const isAdmin = !!(auth && auth === global.lx.config['frontend.password'])
         let username: string | null = null
 
-        if (targetUserParam === '_open' || reqUsername === '_open' || (!reqUsername && !verifyUserAuth(req) && global.lx.config['user.enablePublicFavorites'])) {
-          if (auth !== global.lx.config['frontend.password'] && !global.lx.config['user.enablePublicFavorites']) {
+        const canAccessOpen = global.lx.config['user.enablePublicFavorites'] && (
+          global.lx.config['user.enablePublicNonAdminAccess'] || isAdmin || !!verifyUserAuth(req)
+        )
+        if (targetUserParam === '_open' || reqUsername === '_open' || (!reqUsername && !verifyUserAuth(req))) {
+          if (!canAccessOpen) {
+            res.writeHead(403, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: false, error: '权限不足：未开启公开访问。' }))
+            return
+          }
+          if (auth !== global.lx.config['frontend.password']) {
             res.writeHead(403, { 'Content-Type': 'application/json' })
             res.end(JSON.stringify({ success: false, error: '权限不足：公共歌单修改受限，请先验证管理员身份。' }))
             return
@@ -1976,7 +1989,10 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
         const auth = req.headers['x-frontend-auth']
         const isAdmin = !!(auth && auth === global.lx.config['frontend.password'])
 
-        if (reqUsername === '_open' || userParam === '_open' || (!reqUsername && !verifyUserAuth(req) && global.lx.config['user.enablePublicFavorites'])) {
+        const canAccessOpen = global.lx.config['user.enablePublicFavorites'] && (
+          global.lx.config['user.enablePublicNonAdminAccess'] || isAdmin || !!verifyUserAuth(req)
+        )
+        if ((reqUsername === '_open' || userParam === '_open' || (!reqUsername && !verifyUserAuth(req))) && canAccessOpen) {
           return '_open'
         }
 
@@ -3080,12 +3096,24 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
       if (pathname === '/api/music/cache/list' && req.method === 'GET') {
         const targetUserParam = urlObj.searchParams.get('user')
         const reqUsername = targetUserParam || (req.headers['x-user-name'] as string) || ''
+        const auth = req.headers['x-frontend-auth']
+        const isAdmin = !!(auth && auth === global.lx.config['frontend.password'])
         const isPublic = !reqUsername || reqUsername === 'default' || reqUsername === '_open' || targetUserParam === '_open'
         let username = '_open'
 
-        if (targetUserParam === '_open') {
+        if (isPublic) {
+          const enablePublicNonAdminLocalMusic = !!global.lx.config['user.enablePublicNonAdminLocalMusic']
+          const verified = verifyUserAuth(req)
+          if (!enablePublicNonAdminLocalMusic && !isAdmin && !verified) {
+            res.writeHead(403, {
+              'Content-Type': 'application/json',
+              'Cache-Control': 'no-cache, no-store, must-revalidate',
+            })
+            res.end(JSON.stringify({ success: false, message: '您没有权限查看此目录，请联系管理员设置' }))
+            return
+          }
           username = '_open'
-        } else if (!isPublic) {
+        } else {
           const verified = verifyUserAuth(req)
           if (!verified) {
             res.writeHead(401, {
@@ -3154,10 +3182,18 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
       // 9. Remove Cache File (Single or Batch)
       if (pathname === '/api/music/cache/remove' && req.method === 'POST') {
         const reqUsername = (req.headers['x-user-name'] as string) || ''
-        const isPublic = !reqUsername || reqUsername === 'default'
+        const auth = req.headers['x-frontend-auth']
+        const isAdmin = !!(auth && auth === global.lx.config['frontend.password'])
+        const isPublic = !reqUsername || reqUsername === 'default' || reqUsername === '_open'
         let username = '_open'
 
-        if (!isPublic) {
+        if (isPublic) {
+          if (!isAdmin) {
+            res.writeHead(403, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ success: false, message: '权限不足：删除公共本地歌曲需要验证管理员权限。' }))
+            return
+          }
+        } else {
           const verified = verifyUserAuth(req)
           if (!verified) {
             res.writeHead(401, { 'Content-Type': 'application/json' })
@@ -4188,7 +4224,9 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
         res.end(JSON.stringify({
           'player.enableAuth': global.lx.config['player.enableAuth'] || false,
           'user.enablePublicRestriction': global.lx.config['user.enablePublicRestriction'] || false,
-          'user.enablePublicFavorites': global.lx.config['user.enablePublicFavorites'] || false
+          'user.enablePublicFavorites': global.lx.config['user.enablePublicFavorites'] || false,
+          'user.enablePublicNonAdminAccess': global.lx.config['user.enablePublicNonAdminAccess'] || false,
+          'user.enablePublicNonAdminLocalMusic': global.lx.config['user.enablePublicNonAdminLocalMusic'] || false
         }))
         return
       }
@@ -5142,7 +5180,9 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
             'user.enablePath': global.lx.config['user.enablePath'],
             'user.enableRoot': global.lx.config['user.enableRoot'],
             'user.enablePublicRestriction': global.lx.config['user.enablePublicRestriction'],
+            'user.enablePublicNonAdminLocalMusic': global.lx.config['user.enablePublicNonAdminLocalMusic'],
             'user.enablePublicFavorites': global.lx.config['user.enablePublicFavorites'],
+            'user.enablePublicNonAdminAccess': global.lx.config['user.enablePublicNonAdminAccess'],
             'user.enableLoginCacheRestriction': global.lx.config['user.enableLoginCacheRestriction'],
             'user.enableCacheSizeLimit': global.lx.config['user.enableCacheSizeLimit'],
             'user.cacheSizeLimit': global.lx.config['user.cacheSizeLimit'],
@@ -5193,7 +5233,9 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
               // 新增：处理 user.enableRoot
               if (newConfig['user.enableRoot'] !== undefined) global.lx.config['user.enableRoot'] = newConfig['user.enableRoot']
               if (newConfig['user.enablePublicRestriction'] !== undefined) global.lx.config['user.enablePublicRestriction'] = newConfig['user.enablePublicRestriction']
+              if (newConfig['user.enablePublicNonAdminLocalMusic'] !== undefined) global.lx.config['user.enablePublicNonAdminLocalMusic'] = newConfig['user.enablePublicNonAdminLocalMusic']
               if (newConfig['user.enablePublicFavorites'] !== undefined) global.lx.config['user.enablePublicFavorites'] = newConfig['user.enablePublicFavorites']
+              if (newConfig['user.enablePublicNonAdminAccess'] !== undefined) global.lx.config['user.enablePublicNonAdminAccess'] = newConfig['user.enablePublicNonAdminAccess']
               if (newConfig['user.enableLoginCacheRestriction'] !== undefined) global.lx.config['user.enableLoginCacheRestriction'] = newConfig['user.enableLoginCacheRestriction']
               if (newConfig['user.enableCacheSizeLimit'] !== undefined) global.lx.config['user.enableCacheSizeLimit'] = newConfig['user.enableCacheSizeLimit']
               if (newConfig['user.cacheSizeLimit'] !== undefined) global.lx.config['user.cacheSizeLimit'] = parseInt(newConfig['user.cacheSizeLimit']) || 2000
@@ -5309,7 +5351,9 @@ const handleStartServer = async (port = 9527, ip = '127.0.0.1') => await new Pro
                 'user.enablePath': global.lx.config['user.enablePath'],
                 'user.enableRoot': global.lx.config['user.enableRoot'],
                 'user.enablePublicRestriction': global.lx.config['user.enablePublicRestriction'],
+                'user.enablePublicNonAdminLocalMusic': global.lx.config['user.enablePublicNonAdminLocalMusic'],
                 'user.enablePublicFavorites': global.lx.config['user.enablePublicFavorites'],
+                'user.enablePublicNonAdminAccess': global.lx.config['user.enablePublicNonAdminAccess'],
                 'user.enableLoginCacheRestriction': global.lx.config['user.enableLoginCacheRestriction'],
                 'user.enableCacheSizeLimit': global.lx.config['user.enableCacheSizeLimit'],
                 'user.cacheSizeLimit': global.lx.config['user.cacheSizeLimit'],

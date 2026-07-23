@@ -1427,14 +1427,24 @@ export const removeCacheFile = (filename: string, username?: string, requestedFo
         coverCacheHash = getCoverCacheHash(filename, fs.statSync(filePath))
     } catch (e) { }
 
-    fs.unlinkSync(filePath)
+    try {
+        fs.unlinkSync(filePath)
+    } catch (e: any) {
+        if (e?.code !== 'ENOENT') throw e
+    }
     console.log(`[FileCache] Deleted from ${folder}: ${filename}`)
 
     const ext = path.extname(filename)
     if (ext !== '.lrc') {
         const baseWithoutExt = filename.substring(0, filename.length - ext.length)
         const lrcPath = resolveCacheRelativePath(dir, baseWithoutExt + '.lrc')
-        if (lrcPath && fs.existsSync(lrcPath)) fs.unlinkSync(lrcPath)
+        if (lrcPath && fs.existsSync(lrcPath)) {
+            try {
+                fs.unlinkSync(lrcPath)
+            } catch (e: any) {
+                if (e?.code !== 'ENOENT') throw e
+            }
+        }
     }
 
     const items = indexManager.getAll(normalizedUsername, folder)
@@ -2243,7 +2253,8 @@ export const replaceDownloadedMusicItem = async (
         if (signal?.aborted) throw new Error('Aborted')
 
         const stagedItems = indexManager.getAll(stageUsername, 'music')
-        const downloadedItem = stagedItems.find(item => item.quality === quality)
+        const targetId = normalizeSongId(songInfo)
+        const downloadedItem = stagedItems.find(item => item.id === targetId) || stagedItems[0]
         if (!downloadedItem) throw new Error('新音质文件未写入暂存索引')
 
         const sourceAudioPath = resolveMusicPath(stageRoot, downloadedItem.filename)
