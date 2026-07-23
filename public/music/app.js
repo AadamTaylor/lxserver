@@ -10885,8 +10885,31 @@ async function openPlaylistAddModal(batchSongs = null) {
         return;
     }
 
-    // Set batch state if provided
-    window.batchCollectSongs = Array.isArray(batchSongs) ? batchSongs : null;
+    // 本地歌曲必须先关联真实平台 ID，避免把文件名回退 ID 同步到其他客户端。
+    const isUnboundLocalSong = (song) => {
+        if (!song?.isLocal && !song?._localLibraryItem) return false;
+        return !window.LocalMusicManager?.isPlaylistCollectable(song);
+    };
+
+    if (Array.isArray(batchSongs)) {
+        const collectableSongs = batchSongs.filter(song => !isUnboundLocalSong(song));
+        const unavailableCount = batchSongs.length - collectableSongs.length;
+        if (collectableSongs.length === 0) {
+            showError('歌曲不在曲库中，无法收藏到歌单。请先使用“手动关联”绑定平台歌曲 ID。');
+            window.batchCollectSongs = null;
+            return;
+        }
+        if (unavailableCount > 0) {
+            showInfo(`已跳过 ${unavailableCount} 首未绑定平台 ID 的歌曲；歌曲不在曲库中，无法收藏到歌单。`);
+        }
+        window.batchCollectSongs = collectableSongs;
+    } else {
+        window.batchCollectSongs = null;
+        if (isUnboundLocalSong(currentPlayingSong)) {
+            showError('歌曲不在曲库中，无法收藏到歌单。请先使用“手动关联”绑定平台歌曲 ID。');
+            return;
+        }
+    }
 
     const isBatch = !!window.batchCollectSongs;
     const song = isBatch ? window.batchCollectSongs[0] : currentPlayingSong;

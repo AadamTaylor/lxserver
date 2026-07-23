@@ -1179,8 +1179,50 @@ window.LocalMusicManager = {
         if (span) span.textContent = this.selectedItems.size;
     },
 
+    getPlaylistPlatformIdentity(item) {
+        const songInfo = item?.songInfo || {};
+        const meta = songInfo.meta || item?.meta || {};
+        const source = String(songInfo.source || item?.source || meta.source || '').trim().toLowerCase();
+        if (!source || source === 'unknown' || source === 'local' || source === 'temp') return null;
+
+        const prefix = `${source}_`;
+        const candidates = [
+            songInfo.songmid,
+            songInfo.id,
+            item?.songmid,
+            item?.id,
+            meta.songId
+        ];
+
+        for (const candidate of candidates) {
+            const value = String(candidate || '').trim();
+            if (!value) continue;
+
+            const platformId = value.startsWith(prefix)
+                ? value.slice(prefix.length)
+                : candidate === meta.songId
+                    ? value
+                    : '';
+            if (!platformId || /\s/.test(platformId) || /^(unknown|local|temp|undefined|null)$/i.test(platformId)) continue;
+
+            return {
+                source,
+                platformId,
+                id: `${source}_${platformId}`
+            };
+        }
+
+        return null;
+    },
+
+    isPlaylistCollectable(item) {
+        return !!this.getPlaylistPlatformIdentity(item);
+    },
+
     buildPlaylistSong(item) {
         const songInfo = item?.songInfo || {};
+        const identity = this.getPlaylistPlatformIdentity(item);
+        if (!identity) return null;
         const quality = item?.quality || songInfo.quality || songInfo.type || '128k';
         let types = songInfo.types;
 
@@ -1196,18 +1238,20 @@ window.LocalMusicManager = {
 
         return {
             ...songInfo,
-            id: item.id || songInfo.id,
-            songmid: item.songmid || songInfo.songmid || item.id || songInfo.id,
+            id: identity.id,
+            songmid: identity.platformId,
+            songId: identity.platformId,
             name: item.name || songInfo.name,
             singer: item.singer || songInfo.singer,
-            source: item.source || songInfo.source,
+            source: identity.source,
             albumName: item.album || songInfo.albumName || '',
             albumId: item.albumId || songInfo.albumId,
             img: item.img || songInfo.img,
             interval: item.interval || songInfo.interval,
             quality,
             type: quality,
-            types
+            types,
+            _localLibraryItem: true
         };
     },
 
@@ -1218,12 +1262,25 @@ window.LocalMusicManager = {
             return;
         }
 
+        const collectableTargets = targets.filter(item => this.isPlaylistCollectable(item));
+        const unavailableCount = targets.length - collectableTargets.length;
+        if (collectableTargets.length === 0) {
+            if (typeof showError === 'function') {
+                showError('歌曲不在曲库中，无法收藏到歌单。请先使用“手动关联”绑定平台歌曲 ID。');
+            }
+            return;
+        }
+
         if (typeof window.openPlaylistAddModal !== 'function') {
             if (typeof showError === 'function') showError('歌单组件尚未加载完成');
             return;
         }
 
-        window.openPlaylistAddModal(targets.map(item => this.buildPlaylistSong(item)));
+        if (unavailableCount > 0 && typeof showInfo === 'function') {
+            showInfo(`已跳过 ${unavailableCount} 首未绑定平台 ID 的歌曲；歌曲不在曲库中，无法收藏到歌单。`);
+        }
+
+        window.openPlaylistAddModal(collectableTargets.map(item => this.buildPlaylistSong(item)).filter(Boolean));
     },
 
     playItem(index) {
