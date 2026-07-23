@@ -121,6 +121,13 @@ export interface CacheItem {
     bitDepth?: number
 }
 
+export type CacheFolder = 'cache' | 'music'
+
+export interface RemoveCacheFileResult {
+    deleted: boolean
+    folder?: CacheFolder
+}
+
 export interface DownloadProvenance {
     requestedSource?: string
     downloadSource?: string
@@ -1395,59 +1402,65 @@ export const getCacheCover = async (filename: string, username?: string) => {
 /**
  * Remove a specific cache file
  */
-export const removeCacheFile = (filename: string, username?: string) => {
-    const normalizedUsername = (username && username !== '_open' && username !== 'default') ? username : '_open'
-    const roots: Array<'cache' | 'music'> = ['cache', 'music']
-    let deleted = false
+export const removeCacheFile = (filename: string, username?: string, requestedFolder?: CacheFolder): RemoveCacheFileResult => {
+    if (!filename || typeof filename !== 'string') throw new Error('Invalid filename')
+    if (requestedFolder && requestedFolder !== 'cache' && requestedFolder !== 'music') throw new Error('Invalid folder')
 
-    for (const folder of roots) {
+    const normalizedUsername = (username && username !== '_open' && username !== 'default') ? username : '_open'
+    const candidateFolders: CacheFolder[] = requestedFolder ? [requestedFolder] : ['cache', 'music']
+    const matches = candidateFolders.map(folder => {
         const dir = getCacheDir(normalizedUsername, folder === 'music')
         const filePath = resolveCacheRelativePath(dir, filename)
+        return filePath && fs.existsSync(filePath) ? { folder, dir, filePath } : null
+    }).filter((entry): entry is { folder: CacheFolder; dir: string; filePath: string } => entry !== null)
 
-        if (filePath && fs.existsSync(filePath)) {
-            let coverCacheHash = ''
-            try {
-                coverCacheHash = getCoverCacheHash(filename, fs.statSync(filePath))
-            } catch (e) { }
-
-            fs.unlinkSync(filePath)
-            console.log(`[FileCache] Deleted from ${folder}: ${filename}`)
-
-            // Delete associated lyric file
-            const ext = path.extname(filename)
-            if (ext !== '.lrc') {
-                const baseWithoutExt = filename.substring(0, filename.length - ext.length)
-                const lrcPath = path.join(dir, baseWithoutExt + '.lrc')
-                if (fs.existsSync(lrcPath)) {
-                    fs.unlinkSync(lrcPath)
-                }
-            }
-
-            // [Sync] Also find and remove from index if possible
-            // Note: Since we only have filename here, we might need a reverse lookup if we wanted to be efficient,
-            // but syncCacheIndex will clean up anyway. Let's try to remove from index if we find a match.
-            const items = indexManager.getAll(normalizedUsername, folder)
-            const item = items.find(i => i.filename === filename)
-            if (item) {
-                indexManager.remove(normalizedUsername, item.id, folder)
-            }
-
-            // [New] Delete associated cover cache if exists
-            try {
-                const coverCacheDir = getCoverCacheDir(normalizedUsername)
-                const hashes = [coverCacheHash, crypto.createHash('md5').update(filename).digest('hex')].filter(Boolean)
-                for (const hash of hashes) {
-                    const binPath = path.join(coverCacheDir, `${hash}.bin`)
-                    const mimePath = path.join(coverCacheDir, `${hash}.mime`)
-                    if (fs.existsSync(binPath)) fs.unlinkSync(binPath)
-                    if (fs.existsSync(mimePath)) fs.unlinkSync(mimePath)
-                }
-            } catch (e) { }
-
-            deleted = true
-        }
+    // Older clients only sent a filename. Keep that format safe when the file has
+    // a unique location, but never guess if cache and download both contain it.
+    if (!requestedFolder && matches.length > 1) {
+        throw new Error(`Ambiguous file location for ${filename}; folder is required`)
     }
-    return deleted
+    if (matches.length === 0) return { deleted: false }
+
+    const { folder, dir, filePath } = matches[0]
+    let coverCacheHash = ''
+    try {
+        coverCacheHash = getCoverCacheHash(filename, fs.statSync(filePath))
+    } catch (e) { }
+
+    fs.unlinkSync(filePath)
+    console.log(`[FileCache] Deleted from ${folder}: ${filename}`)
+
+    const ext = path.extname(filename)
+    if (ext !== '.lrc') {
+        const baseWithoutExt = filename.substring(0, filename.length - ext.length)
+        const lrcPath = resolveCacheRelativePath(dir, baseWithoutExt + '.lrc')
+        if (lrcPath && fs.existsSync(lrcPath)) fs.unlinkSync(lrcPath)
+    }
+
+    const items = indexManager.getAll(normalizedUsername, folder)
+    const item = items.find(i => i.filename === filename)
+    if (item) indexManager.remove(normalizedUsername, item.id, folder, item.quality)
+
+    // Cover cache is shared by filename. Preserve it while the same relative file
+    // still exists in the other root so deleting cache does not affect downloads.
+    const otherFolder: CacheFolder = folder === 'cache' ? 'music' : 'cache'
+    const otherDir = getCacheDir(normalizedUsername, otherFolder === 'music')
+    const otherPath = resolveCacheRelativePath(otherDir, filename)
+    const hasCounterpart = !!otherPath && fs.existsSync(otherPath)
+    if (!hasCounterpart) {
+        try {
+            const coverCacheDir = getCoverCacheDir(normalizedUsername)
+            const hashes = [coverCacheHash, crypto.createHash('md5').update(filename).digest('hex')].filter(Boolean)
+            for (const hash of hashes) {
+                const binPath = path.join(coverCacheDir, `${hash}.bin`)
+                const mimePath = path.join(coverCacheDir, `${hash}.mime`)
+                if (fs.existsSync(binPath)) fs.unlinkSync(binPath)
+                if (fs.existsSync(mimePath)) fs.unlinkSync(mimePath)
+            }
+        } catch (e) { }
+    }
+
+    return { deleted: true, folder }
 }
 
 export const setCacheLocation = (location: string) => {

@@ -370,7 +370,7 @@ async function downloadSong(songOrId, forceQuality = null, suppressAlerts = fals
     let selected = skipPromptTarget;
     if (!selected) {
         // [优化] 检测是否已缓存
-        const prefQuality = window.settings?.preferredQuality || '320k';
+        const prefQuality = window.settings?.preferredQuality || 'flac';
         const checkResult = await window.checkServerCache?.(song, prefQuality);
         const cacheSuffix = (checkResult?.exists && !checkResult?.isCollision) ? ' (已缓存)' : '';
 
@@ -406,7 +406,7 @@ async function downloadSong(songOrId, forceQuality = null, suppressAlerts = fals
         }
     } else if (selected && (selected.startsWith('缓存到服务器') || selected.startsWith('下载到服务器'))) {
         // [优化] 检测是否已缓存
-        const prefQuality = window.settings?.preferredQuality || '320k';
+        const prefQuality = window.settings?.preferredQuality || 'flac';
         const checkResult = await window.checkServerCache?.(song, prefQuality);
         const isCached = checkResult?.exists && !checkResult?.isCollision;
 

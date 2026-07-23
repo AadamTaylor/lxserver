@@ -690,7 +690,7 @@ class DownloadManager {
 
         // Keep large batches responsive by limiting concurrent preflight requests.
         const results = await this.mapWithConcurrency(songs, 8, async (song) => {
-            const targetPref = song.quality || window.settings?.preferredQuality || '320k';
+            const targetPref = song.quality || window.settings?.preferredQuality || 'flac';
             const quality = song.quality || (window.QualityManager ? window.QualityManager.getBestQuality(song, targetPref) : targetPref);
             const cacheResult = await checkServerCache(song, quality, true);
             return { song, quality, cacheResult };
@@ -802,7 +802,7 @@ class DownloadManager {
             const downloadResolver = await this.waitForDownloadResolver();
 
             // 1. Resolve URL
-            const requestedQuality = task.quality || (window.QualityManager ? window.QualityManager.getBestQuality(task.song, window.settings?.preferredQuality || '320k') : '320k');
+            const requestedQuality = task.quality || (window.QualityManager ? window.QualityManager.getBestQuality(task.song, window.settings?.preferredQuality || 'flac') : 'flac');
             const requestedSource = task.song?.source || '';
             task.quality = requestedQuality;
 
@@ -869,7 +869,7 @@ class DownloadManager {
 
         try {
             // 1. Resolve URL and Quality
-            const quality = task.quality || (window.QualityManager ? window.QualityManager.getBestQuality(task.song, window.settings?.preferredQuality || '320k') : '320k');
+            const quality = task.quality || (window.QualityManager ? window.QualityManager.getBestQuality(task.song, window.settings?.preferredQuality || 'flac') : 'flac');
             task.quality = quality;
             this.renderTask(task);
 

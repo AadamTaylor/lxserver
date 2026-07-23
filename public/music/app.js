@@ -66,7 +66,7 @@ document.addEventListener('DOMContentLoaded', () => {
 const DEFAULT_SETTINGS = {
     itemsPerPage: 20, // Default 20 items per page, can be 'all'
     defaultEntry: 'favorites', // 默认入口: 'search' | 'songlist' | 'leaderboard' | 'favorites' | 'localmusic'
-    preferredQuality: '320k', // 默认音质偏好
+    preferredQuality: 'flac', // 默认音质偏好
     enablePublicSources: true, // 是否显示公开源
     enableProxyPlayback: false, // 播放音乐代理
     enableProxyDownload: false, // 下载音乐代理
@@ -3297,7 +3297,7 @@ async function resolveSongUrl(song, quality, isSilent = false, isRetry = false, 
                     if (!isSilent) {
                         showInfo(`找到备选源，尝试从 ${getSourceName(matchedSong.source)} 播放...`);
                     }
-                    const bestNextQuality = window.QualityManager.getBestQuality(matchedSong, settings.preferredQuality || '320k');
+                    const bestNextQuality = window.QualityManager.getBestQuality(matchedSong, settings.preferredQuality || 'flac');
                     const matchedResult = await fetchSongUrl(matchedSong, bestNextQuality, fallbackRetryMode, isSilent);
                     return {
                         ...matchedResult,
@@ -3318,7 +3318,7 @@ async function resolveDownloadSongUrl(song, quality, isSilent = true) {
     let lastError = null;
 
     const tryResolveCandidate = async (candidateSong, preferredQuality) => {
-        const requestedQuality = preferredQuality || settings.preferredQuality || '320k';
+        const requestedQuality = preferredQuality || settings.preferredQuality || 'flac';
         let candidateQuality = window.QualityManager?.QUALITY_PRIORITY?.includes(requestedQuality)
             ? requestedQuality
             : (window.QualityManager
@@ -3779,7 +3779,7 @@ async function prefetchNextSong(startFromIndex = null, depth = 0) {
     }
 
     try {
-        const targetQual = window.QualityManager.getBestQuality(nextSong, settings.preferredQuality || '320k');
+        const targetQual = window.QualityManager.getBestQuality(nextSong, settings.preferredQuality || 'flac');
 
         // 1. 检查内存缓存
         let result = prefetchManager.get(nextSong.id);
@@ -4220,7 +4220,7 @@ async function runRecoveryFlow(error) {
             if (matchedSong) {
                 currentRecoveryState.currentSong = matchedSong;
                 currentRecoveryState.triedPlatforms.push(matchedSong.source);
-                const bestNextQuality = window.QualityManager.getBestQuality(matchedSong, settings.preferredQuality || '320k');
+                const bestNextQuality = window.QualityManager.getBestQuality(matchedSong, settings.preferredQuality || 'flac');
                 currentRecoveryState.currentQuality = bestNextQuality;
                 currentRecoveryState.triedQualities = [bestNextQuality];
                 
@@ -4281,7 +4281,7 @@ async function playSong(song, index, forceQuality = null, noPlay = false, isRetr
             }
         }
 
-        const startQuality = forceQuality || window.QualityManager.getBestQuality(song, settings.preferredQuality || '320k');
+        const startQuality = forceQuality || window.QualityManager.getBestQuality(song, settings.preferredQuality || 'flac');
 
         currentRecoveryState = {
             originalSong: song,
@@ -4307,7 +4307,9 @@ async function playSong(song, index, forceQuality = null, noPlay = false, isRetr
 
     currentPlayingSong = song;
     window.currentPlayingSong = song; // expose for lyric-card.js
-    updatePlayerInfo(song);
+    // The advertised quality is not necessarily the quality that will be played.
+    // Clear the previous song's quality until URL resolution confirms the actual one.
+    updatePlayerInfo(song, null);
     updateMediaSessionMetadata(song);
     // 异步触发歌词抓取，初步尝试（此时音质可能尚未最终确定，但在 playSong 后续逻辑中会再次同步）
     fetchLyric(song);
@@ -4388,7 +4390,7 @@ async function playSong(song, index, forceQuality = null, noPlay = false, isRetr
         // 1. 智能音质选择与 URL 解析
         if (!urlResult) {
             if (!targetQuality) {
-                targetQuality = window.QualityManager.getBestQuality(song, settings.preferredQuality || '320k');
+                targetQuality = window.QualityManager.getBestQuality(song, settings.preferredQuality || 'flac');
             }
             setPlayerStatus('正在获取播放链接', null, true);
             urlResult = await resolveSongUrl(song, targetQuality, false, isRetry, !noPlay);
@@ -4429,10 +4431,11 @@ async function playSong(song, index, forceQuality = null, noPlay = false, isRetr
             currentPlayingSong = playbackSong;
             window.currentPlayingSong = playbackSong;
             if (currentRecoveryState) currentRecoveryState.currentSong = playbackSong;
-            updatePlayerInfo(playbackSong);
             updateMediaSessionMetadata(playbackSong);
             fetchLyric(playbackSong, currentQuality);
         }
+        // Always refresh the bottom-player badge, including cache hits that keep the same song object.
+        updatePlayerInfo(playbackSong, currentQuality);
 
         // [Sync] 确定了最终播放音质后，直接以正确音质重写服务器端歌词缓存文件名
         // 注意：不能再调用 fetchLyric(song)，因为歌词已就绪时 fetchLyric 会提前返回，
@@ -4773,7 +4776,7 @@ window.setImg = (id, src) => {
     }
 };
 
-function updatePlayerInfo(song) {
+function updatePlayerInfo(song, actualQuality) {
     // Bottom Player - 更新标题
     const titleEl = document.getElementById('player-title');
     if (titleEl) {
@@ -4794,7 +4797,12 @@ function updatePlayerInfo(song) {
     const sourceEl = document.getElementById('player-source');
     if (sourceEl) {
         if (song.source) {
-            const qualityTags = getQualityTags(song);
+            // Without an explicitly resolved quality, only show the source.
+            // This prevents the player's badge from claiming a higher advertised quality.
+            const resolvedQuality = actualQuality === undefined
+                ? (song === currentPlayingSong ? currentQuality : null)
+                : actualQuality;
+            const qualityTags = resolvedQuality ? getQualityTags({ quality: resolvedQuality }) : '';
             sourceEl.innerHTML = getSourceTag(song.source) + qualityTags;
             sourceEl.classList.remove('hidden');
         } else {
@@ -5196,6 +5204,7 @@ function savePlaybackState() {
             // 限制长度为 300 首以兼顾性能和容量（通常足够临时列表使用）
             playlist: currentPlaylist ? currentPlaylist.slice(0, 300) : null,
             playMode: playMode,
+            quality: currentQuality,
             timestamp: Date.now()
         };
         localStorage.setItem('lx_playback_state', JSON.stringify(state));
@@ -5241,9 +5250,10 @@ async function restorePlaybackState() {
         currentIndex = state.index >= 0 ? state.index : 0;
         currentPlayingSong = state.song;
         window.currentPlayingSong = state.song;
+        currentQuality = state.quality || null;
 
         // 3. 更新 UI (静默更新)
-        updatePlayerInfo(state.song);
+        updatePlayerInfo(state.song, currentQuality);
         updateMediaSessionMetadata(state.song);
         renderQueue(); // 提前渲染队列 UI
 
@@ -6236,7 +6246,7 @@ async function resetAllSettings() {
 
         // If sync enabled, push to server
         if (settings.saveAccountSettingsToFile) {
-            pushSettingsToServer();
+            await pushSettingsToServer();
         }
 
         showSuccess('设置已重置，正在重新加载页面...');
@@ -6370,6 +6380,14 @@ let currentCacheList = [];
 let selectedCacheFiles = new Set();
 let cacheBatchMode = false;
 
+function getCacheItemKey(item) {
+    return `${item.folder}\u0000${item.filename}`;
+}
+
+function getSelectedCacheItems() {
+    return currentCacheList.filter(item => selectedCacheFiles.has(getCacheItemKey(item)));
+}
+
 function toggleCacheDrawer() {
     const drawer = document.getElementById('cache-drawer');
     if (drawer) {
@@ -6432,7 +6450,7 @@ function renderCacheList() {
     }
 
     container.innerHTML = currentCacheList.map((item, idx) => {
-        const isSelected = selectedCacheFiles.has(item.filename);
+        const isSelected = selectedCacheFiles.has(getCacheItemKey(item));
 
         // 样式同步：使用主列表的来源标签生成函数
         const sourceTagHtml = window.getSourceTag ? window.getSourceTag(item.source) : `<span class="px-1 py-0 rounded text-[10px] font-bold border t-badge-red mr-1">${item.source.toUpperCase()}</span>`;
@@ -6469,7 +6487,7 @@ function renderCacheList() {
         return `
             <div class="group flex items-center p-2.5 rounded-2xl hover:t-bg-panel-light transition-all duration-300 gap-3 border border-transparent 
                 ${isSelected ? 't-bg-panel-light border-blue-500/30 ring-1 ring-blue-500/10' : ''}" 
-                onclick="${cacheBatchMode ? `toggleCacheSelection('${item.filename.replace(/'/g, "\\'")}')` : ''}">
+                onclick="${cacheBatchMode ? `toggleCacheSelection(${idx})` : ''}">
                 
                 ${cacheBatchMode ? `
                 <div class="flex-shrink-0 w-5 flex items-center justify-center">
@@ -6514,7 +6532,7 @@ function renderCacheList() {
 
                 <div class="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                     ${!cacheBatchMode ? `
-                        <button onclick="event.stopPropagation(); removeCacheItem('${item.filename.replace(/'/g, "\\'")}')" 
+                        <button onclick="event.stopPropagation(); removeCacheItem(${idx})"
                                 class="p-2 t-text-muted hover:text-red-500 transition-colors" title="删除">
                             <i class="fas fa-trash-alt text-xs"></i>
                         </button>
@@ -6623,18 +6641,21 @@ function exitCacheBatchMode() {
     renderCacheList();
 }
 
-function toggleCacheSelection(filename) {
-    if (selectedCacheFiles.has(filename)) {
-        selectedCacheFiles.delete(filename);
+function toggleCacheSelection(index) {
+    const item = currentCacheList[index];
+    if (!item) return;
+    const key = getCacheItemKey(item);
+    if (selectedCacheFiles.has(key)) {
+        selectedCacheFiles.delete(key);
     } else {
-        selectedCacheFiles.add(filename);
+        selectedCacheFiles.add(key);
     }
     renderCacheList();
     updateCacheBatchCount();
 }
 
 function selectAllCache() {
-    currentCacheList.forEach(item => selectedCacheFiles.add(item.filename));
+    currentCacheList.forEach(item => selectedCacheFiles.add(getCacheItemKey(item)));
     renderCacheList();
     updateCacheBatchCount();
 }
@@ -6650,7 +6671,12 @@ function updateCacheBatchCount() {
     if (el) el.textContent = selectedCacheFiles.size;
 }
 
-async function removeCacheItem(filename) {
+async function removeCacheItem(index) {
+    const item = currentCacheList[index];
+    if (!item) {
+        showError('文件信息已失效，请刷新后重试');
+        return;
+    }
     const isLogined = !!localStorage.getItem('lx_user_token');
     const isPublicUser = !window.currentListData || !window.currentListData.username || window.currentListData.username === 'default';
     if (isPublicUser && window.lx_config && window.lx_config['user.enablePublicRestriction'] && !isLogined) {
@@ -6677,14 +6703,15 @@ async function removeCacheItem(filename) {
         const res = await fetch('/api/music/cache/remove', {
             method: 'POST',
             headers: headers,
-            body: JSON.stringify({ filenames: [filename] })
+            body: JSON.stringify({ items: [{ filename: item.filename, folder: item.folder }] })
         });
 
-        if (res.ok) {
+        const result = await res.json();
+        if (res.ok && result.success) {
             showSuccess('已删除');
             refreshCacheList();
         } else {
-            throw new Error('删除失败');
+            throw new Error(result.message || '删除失败');
         }
     } catch (e) {
         showError(e.message);
@@ -6692,7 +6719,8 @@ async function removeCacheItem(filename) {
 }
 
 async function batchDeleteCache() {
-    if (selectedCacheFiles.size === 0) {
+    const deleteItems = getSelectedCacheItems();
+    if (deleteItems.length === 0) {
         showError('请先选择文件');
         return;
     }
@@ -6711,7 +6739,7 @@ async function batchDeleteCache() {
         }
     }
 
-    if (!(await showSelect('批量删除', `确定要删除这 ${selectedCacheFiles.size} 个缓存文件吗？`, { danger: true }))) return;
+    if (!(await showSelect('批量删除', `确定要删除这 ${deleteItems.length} 个缓存文件吗？`, { danger: true }))) return;
 
     try {
         const username = (window.currentListData && window.currentListData.username) || localStorage.getItem('lx_sync_user') || '';
@@ -6721,16 +6749,18 @@ async function batchDeleteCache() {
         const res = await fetch('/api/music/cache/remove', {
             method: 'POST',
             headers: headers,
-            body: JSON.stringify({ filenames: Array.from(selectedCacheFiles) })
+            body: JSON.stringify({
+                items: deleteItems.map(item => ({ filename: item.filename, folder: item.folder }))
+            })
         });
 
-        if (res.ok) {
-            showSuccess(`成功删除 ${selectedCacheFiles.size} 个文件`);
+        const result = await res.json();
+        if (result.deletedCount > 0) {
             exitCacheBatchMode();
-            refreshCacheList();
-        } else {
-            throw new Error('删除失败');
+            await refreshCacheList();
         }
+        if (!res.ok || !result.success) throw new Error(result.message || '删除失败');
+        showSuccess(`成功删除 ${result.deletedCount} 个文件`);
     } catch (e) {
         showError(e.message);
     }
@@ -7654,8 +7684,8 @@ const originalPlaySong = window.playSong;
 // Actually `updatePlayerInfo` is perfect.
 
 const _originalUpdatePlayerInfo = updatePlayerInfo;
-updatePlayerInfo = function (song) {
-    _originalUpdatePlayerInfo(song);
+updatePlayerInfo = function (song, actualQuality) {
+    _originalUpdatePlayerInfo(song, actualQuality);
     // Detail View update
     updateDetailInfo(song);
     // fetchLyric(song); // [Moved] 移至 playSong 中精确控制时机
@@ -9222,6 +9252,7 @@ function renderMyLists(data) {
     // Helper to create list item
     const createItem = (listObj, name, icon, count) => {
         const id = typeof listObj === 'string' ? listObj : listObj.id;
+        const displayName = String(name || '未命名歌单');
         const div = document.createElement('div');
         div.className = "px-6 py-2 text-sm t-text-muted hover:t-bg-main cursor-pointer flex items-center group transition-colors overflow-hidden";
         div.setAttribute('data-sidebar-list-id', id);
@@ -9229,7 +9260,9 @@ function renderMyLists(data) {
         div.onclick = () => handleListClick(id);
 
         // Use createMarqueeHtml for list name
-        const nameHtml = name.length > 8 ? createMarqueeHtml(name, 'flex-1') : `<span class="ml-2 flex-1 truncate">${name}</span>`;
+        const nameHtml = displayName.length > 8
+            ? createMarqueeHtml(displayName, 'flex-1')
+            : `<span class="ml-2 flex-1 truncate">${escapeHtmlText(displayName)}</span>`;
 
         // Buttons logic (for collected external playlists)
         const showExternalOps = listObj && listObj.sourceListId && listObj.source;
@@ -9255,8 +9288,9 @@ function renderMyLists(data) {
             </span>
             ${opsHtml}
             <i class="fas ${icon} w-5 t-text-muted group-hover:text-emerald-500 transition-colors flex-shrink-0"></i>
-            ${name.length > 8 ? `<div class="ml-2 flex-1 overflow-hidden">${nameHtml}</div>` : nameHtml}
+            ${displayName.length > 8 ? `<div class="ml-2 flex-1 overflow-hidden">${nameHtml}</div>` : nameHtml}
             <span class="text-xs text-gray-300 group-hover:t-text-muted mr-2 flex-shrink-0">${count}</span>
+            ${typeof listObj !== 'string' ? `<button type="button" class="text-gray-300 hover:text-emerald-500 flex-shrink-0 mr-2 transition-colors" title="重命名歌单" aria-label="重命名歌单" onclick="handleRenameList('${id}', event)"><i class="fas fa-pen text-[10px]"></i></button>` : ''}
             ${id !== 'default' && id !== 'love' ? `<i class="fas fa-trash text-gray-300 hover:text-red-500 hidden group-hover:block flex-shrink-0" onclick="handleRemoveList('${id}', event)"></i>` : ''}
         `;
         return div;
@@ -9487,6 +9521,42 @@ async function handleCreateList() {
             showError('创建失败，请重试');
         }
     }
+}
+
+async function handleRenameList(listId, event) {
+    if (event) event.stopPropagation();
+    if (!currentListData?.userList) return;
+
+    const list = currentListData.userList.find(item => item.id === listId);
+    if (!list) {
+        showError('未找到要重命名的歌单');
+        return;
+    }
+
+    const input = await showInput('重命名歌单', '请输入新的歌单名称：', {
+        placeholder: '歌单名称',
+        defaultValue: list.name || ''
+    });
+    if (input === null || input === undefined) return;
+
+    const nextName = String(input).trim();
+    if (!nextName) {
+        showError('歌单名称不能为空');
+        return;
+    }
+    if (nextName === list.name) return;
+
+    list.name = nextName;
+    await pushDataChange();
+    renderMyLists(currentListData);
+
+    if (typeof renderPlaylistAddGrid === 'function' && !document.getElementById('playlist-add-modal')?.classList.contains('hidden')) {
+        renderPlaylistAddGrid();
+    }
+    if (window.currentSearchScope === 'local_list' && window.currentViewingListId === listId) {
+        handleListClick(listId, true);
+    }
+    showSuccess('歌单名称已更新');
 }
 
 function formatSongToLxMusicStandard(item) {
@@ -10003,6 +10073,7 @@ async function refreshUserListData() {
 window.refreshUserListData = refreshUserListData;
 window.handleRemoteConnect = handleRemoteConnect;
 window.handleCreateList = handleCreateList;
+window.handleRenameList = handleRenameList;
 window.handleRefreshList = handleRefreshList;
 window.handleRemoveList = handleRemoveList;
 window.toggleFavorites = toggleFavorites;
@@ -10814,8 +10885,31 @@ async function openPlaylistAddModal(batchSongs = null) {
         return;
     }
 
-    // Set batch state if provided
-    window.batchCollectSongs = Array.isArray(batchSongs) ? batchSongs : null;
+    // 本地歌曲必须先关联真实平台 ID，避免把文件名回退 ID 同步到其他客户端。
+    const isUnboundLocalSong = (song) => {
+        if (!song?.isLocal && !song?._localLibraryItem) return false;
+        return !window.LocalMusicManager?.isPlaylistCollectable(song);
+    };
+
+    if (Array.isArray(batchSongs)) {
+        const collectableSongs = batchSongs.filter(song => !isUnboundLocalSong(song));
+        const unavailableCount = batchSongs.length - collectableSongs.length;
+        if (collectableSongs.length === 0) {
+            showError('歌曲不在曲库中，无法收藏到歌单。请先使用“手动关联”绑定平台歌曲 ID。');
+            window.batchCollectSongs = null;
+            return;
+        }
+        if (unavailableCount > 0) {
+            showInfo(`已跳过 ${unavailableCount} 首未绑定平台 ID 的歌曲；歌曲不在曲库中，无法收藏到歌单。`);
+        }
+        window.batchCollectSongs = collectableSongs;
+    } else {
+        window.batchCollectSongs = null;
+        if (isUnboundLocalSong(currentPlayingSong)) {
+            showError('歌曲不在曲库中，无法收藏到歌单。请先使用“手动关联”绑定平台歌曲 ID。');
+            return;
+        }
+    }
 
     const isBatch = !!window.batchCollectSongs;
     const song = isBatch ? window.batchCollectSongs[0] : currentPlayingSong;
@@ -11750,7 +11844,7 @@ async function handleDownloadClick(event) {
     const song = currentPlayingSong;
     
     // [优化] 检测是否已缓存
-    const prefQuality = window.settings?.preferredQuality || '320k';
+    const prefQuality = window.settings?.preferredQuality || 'flac';
     const checkResult = await window.checkServerCache?.(song, prefQuality);
     const cacheSuffix = (checkResult?.exists && !checkResult?.isCollision) ? ' (已缓存)' : '';
 
